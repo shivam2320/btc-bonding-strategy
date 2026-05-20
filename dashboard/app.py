@@ -186,10 +186,11 @@ with mc[2]:
     st.metric("24h Low",  f"${stats24.get('low', 0):,.0f}"  if stats24 else "—")
 with mc[3]:
     st.metric("ATR (14d)", f"${atr:,.0f}" if atr else "—")
+vol_1m = vol.get("1m") if vol else None
 with mc[4]:
-    st.metric("EWMA σ (1M)", f"{vol['ewma_sigma']:.2f}%" if vol else "—")
+    st.metric("Avg H-L % (1M)", f"{vol_1m['avg_hl_pct']:.2f}%" if vol_1m else "—")
 with mc[5]:
-    st.metric("Avg Daily H-L", f"${vol['avg_hl_usd']:,.0f}" if vol else "—")
+    st.metric("Avg H-L $ (1M)", f"${vol_1m['avg_hl_usd']:,.0f}" if vol_1m else "—")
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -324,12 +325,12 @@ with col_verdict:
     if ff:
         signals.append(("⚠ High Impact News", "yellow", f"{len(ff)} event(s) — expect volatility"))
 
-    if vol:
-        ewma = vol["ewma_sigma"]
-        if ewma > 3:
-            signals.append(("High Volatility", "yellow", f"EWMA σ {ewma:.2f}% — wide moves expected"))
+    if vol_1m:
+        avg_hl = vol_1m["avg_hl_pct"]
+        if avg_hl > 3:
+            signals.append(("High Volatility", "yellow", f"Avg H-L {avg_hl:.2f}% — wide moves expected"))
         else:
-            signals.append(("Normal Volatility", "green", f"EWMA σ {ewma:.2f}%"))
+            signals.append(("Normal Volatility", "green", f"Avg H-L {avg_hl:.2f}%"))
 
     for label, color, note in signals:
         dot_class = f"dot-{color}"
@@ -361,28 +362,40 @@ with col_verdict:
 
 # ── COLUMN 3 · Volatility Details ────────────────────────────────────────────
 with col_vol:
-    st.markdown("<div class='sec-hdr'>Volatility Details (1M Hourly CSVs)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sec-hdr'>Volatility Analysis</div>", unsafe_allow_html=True)
+
+    def _vol_table(m: dict, label: str) -> None:
+        st.markdown(f"<div class='sec-hdr' style='margin-top:6px'>{label}</div>", unsafe_allow_html=True)
+        rows = [
+            ("Avg volatility % (open/close)", f"{m['avg_oc_pct']:.2f}%"),
+            ("Avg volatility % (high/low)",   f"{m['avg_hl_pct']:.2f}%"),
+            ("Avg volatility USD (open/close)", f"${m['avg_oc_usd']:,.0f}"),
+            ("Avg volatility USD (high/low)",   f"${m['avg_hl_usd']:,.0f}"),
+            (f"Max % move in a day", f"{m['max_hl_pct']:.2f}% <span class='muted' style='font-size:0.73rem'>({m['max_hl_pct_date']})</span>"),
+            (f"Max USD move in a day", f"${m['max_hl_usd']:,.0f} <span class='muted' style='font-size:0.73rem'>({m['max_hl_usd_date']})</span>"),
+        ]
+        for label_row, value in rows:
+            st.markdown(
+                f"<div class='card' style='padding:7px 14px;display:flex;justify-content:space-between;align-items:center'>"
+                f"<span class='muted'>{label_row}</span>"
+                f"<b>{value}</b>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
     if vol:
-        vc1, vc2 = st.columns(2)
-        with vc1:
-            st.metric("Hist σ",    f"{vol['hist_sigma']:.3f}%")
-            st.metric("Avg OC %",  f"{vol['avg_hl_pct']:.2f}%")
-        with vc2:
-            st.metric("EWMA σ",    f"{vol['ewma_sigma']:.3f}%")
-            st.metric("Avg H-L $", f"${vol['avg_hl_usd']:,.0f}")
-        st.markdown(
-            f"<span class='muted' style='font-size:0.72rem'>CSV data as of {vol.get('as_of', '—')}</span>",
-            unsafe_allow_html=True,
-        )
+        if vol.get("1m"):
+            _vol_table(vol["1m"], "1 Month")
+        if vol.get("6m"):
+            _vol_table(vol["6m"], "6 Months")
     else:
         st.markdown(
-            "<div class='card muted'>Local CSV not found.<br>"
-            "Place BTCUSD_1M_1HOUR_FROM_PERPLEXITY CSVs in project root.</div>",
+            "<div class='card muted'>Local CSVs not found.<br>"
+            "Place BTCUSD CSVs in project root.</div>",
             unsafe_allow_html=True,
         )
 
-    if atr and vol and spot:
+    if atr and spot:
         st.markdown("<br>", unsafe_allow_html=True)
         atr_pct = atr / spot * 100
         st.markdown(

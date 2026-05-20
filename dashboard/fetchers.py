@@ -100,33 +100,44 @@ def compute_emas(df: pd.DataFrame, periods: tuple = (20, 50, 200)) -> dict[int, 
 
 # ── Volatility (from local CSVs) ──────────────────────────────────────────────
 
+def _vol_metrics_for(daily: "pd.DataFrame") -> dict:
+    from btc_volatility_analysis import bar_metrics, max_move_series_and_dates  # type: ignore
+    m = bar_metrics(daily)
+    max_pct, max_usd, ts_pct, ts_usd, _, _ = max_move_series_and_dates(daily)
+    return {
+        "avg_oc_pct": m["avg_oc_pct"],
+        "avg_hl_pct": m["avg_hl_pct"],
+        "avg_oc_usd": m["avg_oc_usd"],
+        "avg_hl_usd": m["avg_hl_usd"],
+        "max_hl_pct": max_pct,
+        "max_hl_usd": max_usd,
+        "max_hl_pct_date": str(ts_pct.date()) if ts_pct else "—",
+        "max_hl_usd_date": str(ts_usd.date()) if ts_usd else "—",
+    }
+
+
 def get_volatility_metrics() -> dict | None:
     try:
         from btc_volatility_analysis import (  # type: ignore
-            bar_metrics,
-            daily_log_returns_from_close,
             daily_ohlc_from_hourly,
-            ewma_volatility_series_pct,
-            historical_volatility_from_returns,
             load_ohlc,
         )
 
-        path = ROOT / "BTCUSD_1M_1HOUR_FROM_PERPLEXITY (1).csv"
-        if not path.exists():
+        path_1m = ROOT / "BTCUSD_1M_1HOUR_FROM_PERPLEXITY (1).csv"
+        path_6m = ROOT / "BTCUSD_6M_1DAY_FROM_PERPLEXITY (1).csv"
+
+        m1 = None
+        if path_1m.exists():
+            daily_1m = daily_ohlc_from_hourly(load_ohlc(path_1m))
+            m1 = _vol_metrics_for(daily_1m)
+
+        m6 = None
+        if path_6m.exists():
+            m6 = _vol_metrics_for(load_ohlc(path_6m))
+
+        if m1 is None and m6 is None:
             return None
-        raw = load_ohlc(path)
-        daily = daily_ohlc_from_hourly(raw)
-        r = daily_log_returns_from_close(daily)
-        sigma_hist, _mu, var_dec = historical_volatility_from_returns(r)
-        ewma_series = ewma_volatility_series_pct(r, lam=0.94, initial_var=float(var_dec))
-        m = bar_metrics(daily)
-        return {
-            "hist_sigma": sigma_hist,
-            "ewma_sigma": float(ewma_series.iloc[-1]),
-            "avg_hl_pct": m["avg_hl_pct"],
-            "avg_hl_usd": m["avg_hl_usd"],
-            "as_of": str(ewma_series.index[-1].date()),
-        }
+        return {"1m": m1, "6m": m6}
     except Exception:
         return None
 
