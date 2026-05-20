@@ -32,9 +32,6 @@ backtest/.mplconfig/
 *.swp
 *.swo
 
-# CSV data files (large, sourced externally)
-*.csv
-
 # Environment
 .env
 .env.*
