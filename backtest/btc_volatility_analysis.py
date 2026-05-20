@@ -14,6 +14,9 @@ Volatility stats from Perplexity BTC OHLC CSVs (1Y daily, 6M daily, 1M hourly).
 Metrics 1–4: mean daily |O−C|/O and (H−L)/O (same as before).
 
 Max day: largest daily (H−L)/open and H−L USD, with dates and optional plots.
+
+Weekday/weekend splits use the daily bar date. Close-to-close log returns are
+classified by the ending close date: Saturday/Sunday returns are weekend returns.
 """
 
 from __future__ import annotations
@@ -54,9 +57,10 @@ CSV_CONFIG: list[tuple[str, str, Path, str]] = [
 
 def load_ohlc(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, parse_dates=["date"])
+    df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
     for col in ("open", "high", "low", "close"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["open", "high", "low", "close"])
+    df = df.dropna(subset=["date", "open", "high", "low", "close"])
     df = df.loc[df["open"] > 0]
     df = df.sort_values("date")
     return df
@@ -78,6 +82,13 @@ def ensure_dt_index(daily: pd.DataFrame) -> pd.DataFrame:
 
 
 def bar_metrics(df: pd.DataFrame) -> dict[str, float]:
+    if df.empty:
+        return {
+            "avg_oc_pct": float("nan"),
+            "avg_hl_pct": float("nan"),
+            "avg_oc_usd": float("nan"),
+            "avg_hl_usd": float("nan"),
+        }
     o = df["open"]
     h = df["high"]
     l = df["low"]
@@ -145,12 +156,15 @@ def ewma_volatility_series_pct(
 
 def max_move_series_and_dates(
     daily: pd.DataFrame,
-) -> tuple[float, float, pd.Timestamp, pd.Timestamp, pd.Series, pd.Series]:
+) -> tuple[float, float, pd.Timestamp | None, pd.Timestamp | None, pd.Series, pd.Series]:
     """
     Returns max hl%, max hl USD, date of max %, date of max USD,
     and the full daily series (indexed by datetime) for plotting.
     """
     dd = ensure_dt_index(daily)
+    if dd.empty:
+        empty = pd.Series(dtype=float)
+        return float("nan"), float("nan"), None, None, empty, empty
     o = dd["open"]
     h = dd["high"]
     l = dd["low"]
@@ -168,10 +182,76 @@ def max_move_series_and_dates(
     )
 
 
+def split_daily_by_day_type(daily: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    dd = ensure_dt_index(daily)
+    weekday_mask = dd.index.dayofweek < 5
+    return {
+        "all": dd,
+        "weekday": dd.loc[weekday_mask],
+        "weekend": dd.loc[~weekday_mask],
+    }
+
+
+def split_returns_by_day_type(r: pd.Series) -> dict[str, pd.Series]:
+    weekday_mask = r.index.dayofweek < 5
+    return {
+        "all": r,
+        "weekday": r.loc[weekday_mask],
+        "weekend": r.loc[~weekday_mask],
+    }
+
+
 def _fmt_ts(ts: pd.Timestamp) -> str:
     if ts.tzinfo is not None:
         return ts.isoformat()
     return pd.Timestamp(ts).isoformat()
+
+
+def print_metric_block(
+    title: str,
+    daily: pd.DataFrame,
+    returns: pd.Series,
+    *,
+    ewma_lambda: float,
+) -> None:
+    m = bar_metrics(daily)
+    max_pct, max_usd, ts_pct, ts_usd, _, _ = max_move_series_and_dates(daily)
+    sigma_hist, mu_pct, var_dec = historical_volatility_from_returns(returns)
+    if len(returns) >= 2 and np.isfinite(var_dec):
+        ewma_series = ewma_volatility_series_pct(
+            returns, lam=ewma_lambda, initial_var=float(var_dec)
+        )
+        latest_ewma = float(ewma_series.iloc[-1])
+        ewma_asof = ewma_series.index[-1]
+    else:
+        latest_ewma = float("nan")
+        ewma_asof = None
+
+    print(f"  --- {title} ---")
+    print(f"      Daily bars: {len(daily)}  |  close-to-close returns: {len(returns)}")
+    if len(returns) >= 2:
+        print(f"      μ (mean return):                    {mu_pct:.6f}%  per day")
+        print(f"      Variance (N−1, demeaned):           {var_dec:.8f}")
+        print(f"      Historical σ = √var × 100:        {sigma_hist:.4f}%")
+        print(
+            f"      EWMA σ (λ={ewma_lambda}, σ₀²=hist var):  latest = {latest_ewma:.4f}%"
+            + (f"  (as of {_fmt_ts(pd.Timestamp(ewma_asof))})" if ewma_asof is not None else "")
+        )
+    else:
+        print("      (Not enough closes to compute log-return volatility.)")
+    print(f"      Avg volatility % (open/close):       {m['avg_oc_pct']:.4f}%")
+    print(f"      Avg volatility % (high/low):         {m['avg_hl_pct']:.4f}%")
+    print(f"      Avg volatility USD (open/close):     ${m['avg_oc_usd']:,.2f}")
+    print(f"      Avg volatility USD (high/low):       ${m['avg_hl_usd']:,.2f}")
+    print(f"      Max % movement in a day:             {max_pct:.4f}%")
+    if ts_pct is not None:
+        print(f"        date: {_fmt_ts(ts_pct)}")
+    print(f"      Max USD movement in a day:           ${max_usd:,.2f}")
+    if ts_usd is not None:
+        print(f"        date: {_fmt_ts(ts_usd)}")
+    if ts_pct is not None and ts_usd is not None and ts_pct.date() != ts_usd.date():
+        print("        (max % and max USD fall on different calendar days.)")
+    print()
 
 
 def plot_max_moves(
@@ -240,7 +320,6 @@ def run_one(
     df = load_ohlc(path)
     if bar_kind == "hourly":
         daily = daily_ohlc_from_hourly(df)
-        m = bar_metrics(daily)
         bar_note = (
             f"{len(df)} hourly rows → {len(daily)} daily bars; "
             "metrics 1–4 and close-based vol use daily OHLC"
@@ -248,53 +327,38 @@ def run_one(
         n_raw = len(df)
     else:
         daily = df
-        m = bar_metrics(daily)
         bar_note = f"{len(df)} daily bars"
         n_raw = len(df)
 
-    max_pct, max_usd, ts_pct, ts_usd, hl_pct_s, hl_usd_s = max_move_series_and_dates(
-        daily
-    )
-
     r = daily_log_returns_from_close(daily)
-    sigma_hist, mu_pct, var_dec = historical_volatility_from_returns(r)
-    if len(r) >= 2 and np.isfinite(var_dec):
-        ewma_series = ewma_volatility_series_pct(
-            r, lam=ewma_lambda, initial_var=float(var_dec)
-        )
-        latest_ewma = float(ewma_series.iloc[-1])
-        ewma_asof = ewma_series.index[-1]
-    else:
-        latest_ewma = float("nan")
-        ewma_asof = None
+    daily_splits = split_daily_by_day_type(daily)
+    return_splits = split_returns_by_day_type(r)
+    _, _, ts_pct, ts_usd, hl_pct_s, hl_usd_s = max_move_series_and_dates(daily)
 
     print(f"\n=== {label} ===")
     print(f"Rows (raw file): {n_raw}  |  {bar_note}\n")
-    print("  --- Volatility from daily closes (log returns) ---")
-    print(f"      Daily log returns r_t = ln(close_t/close_{{t-1}}):  N = {len(r)}")
-    if len(r) >= 2:
-        print(f"      μ (mean return):                    {mu_pct:.6f}%  per day")
-        print(f"      Variance (N−1, demeaned):           {var_dec:.8f}")
-        print(f"      Historical σ = √var × 100:        {sigma_hist:.4f}%")
-        print(
-            f"      EWMA σ (λ={ewma_lambda}, σ₀²=hist var):  latest = {latest_ewma:.4f}%"
-            + (f"  (as of {_fmt_ts(pd.Timestamp(ewma_asof))})" if ewma_asof is not None else "")
-        )
-    else:
-        print("      (Not enough closes to compute log-return volatility.)\n")
-    print()
-    print(f"  1. Avg volatility % (open/close):     {m['avg_oc_pct']:.4f}%  (per daily bar)")
-    print(f"  2. Avg volatility % (high/low):       {m['avg_hl_pct']:.4f}%  (per daily bar)")
-    print(f"  3. Avg volatility USD (open/close):   ${m['avg_oc_usd']:,.2f}")
-    print(f"  4. Avg volatility USD (high/low):     ${m['avg_hl_usd']:,.2f}")
-    print(f"  5. Max % movement in a day:         {max_pct:.4f}%  (daily high-low range / open)")
-    print(f"      → date: {_fmt_ts(ts_pct)}")
-    print(f"  6. Max USD movement in a day:         ${max_usd:,.2f}  (daily high-low range)")
-    print(f"      → date: {_fmt_ts(ts_usd)}")
-    if ts_pct.date() != ts_usd.date():
-        print("      (max % and max USD fall on different calendar days.)")
+    print("  Close-based vol uses r_t = ln(close_t/close_{t-1}).")
+    print("  Weekday/weekend returns are classified by the ending close date.\n")
+    print_metric_block(
+        "All days",
+        daily_splits["all"],
+        return_splits["all"],
+        ewma_lambda=ewma_lambda,
+    )
+    print_metric_block(
+        "Weekdays (Mon-Fri)",
+        daily_splits["weekday"],
+        return_splits["weekday"],
+        ewma_lambda=ewma_lambda,
+    )
+    print_metric_block(
+        "Weekends (Sat-Sun)",
+        daily_splits["weekend"],
+        return_splits["weekend"],
+        ewma_lambda=ewma_lambda,
+    )
 
-    if plot:
+    if plot and ts_pct is not None and ts_usd is not None:
         p = plot_max_moves(slug, label, hl_pct_s, hl_usd_s, ts_pct, ts_usd, plot_dir)
         if p:
             print(f"\n  Plot saved: {p}")
@@ -331,7 +395,7 @@ def main() -> None:
     print(
         "BTC volatility from Perplexity CSVs\n"
         "Close-based vol: log returns → μ → (N−1) variance → σ; then EWMA with σ₀² = that variance.\n"
-        "Metrics 1–4 = mean over **daily** bars of |close−open|/open×100 and (high−low)/open×100.\n"
+        "Metrics are shown for all days, weekdays, and weekends using daily bars.\n"
         f"Max-move charts: {'enabled' if plot else 'disabled'}."
     )
     for slug, label, path, kind in CSV_CONFIG:
