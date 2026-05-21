@@ -19,8 +19,9 @@ import requests
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "backtest"))
 
-BINANCE_REST = "https://api.binance.com"
-BINANCE_FUTURES = "https://fapi.binance.com"
+COINGECKO = "https://api.coingecko.com/api/v3"
+KRAKEN    = "https://api.kraken.com/0/public"
+BYBIT     = "https://api.bybit.com/v5"
 GAMMA_API = "https://gamma-api.polymarket.com"
 
 _SESS = requests.Session()
@@ -44,39 +45,57 @@ def _get(url: str, params: dict | None = None, timeout: int = 8) -> dict | list 
         return None
 
 
-# ── BTC Price ─────────────────────────────────────────────────────────────────
+# ── BTC Price  (CoinGecko — no geo restrictions) ──────────────────────────────
+
+def _cg_market() -> dict:
+    """Fetch BTC market data (spot, 24h high/low/change/vol) from CoinGecko."""
+    data = _get(f"{COINGECKO}/coins/markets", {
+        "vs_currency": "usd",
+        "ids": "bitcoin",
+    })
+    if data and isinstance(data, list) and data:
+        return data[0]
+    return {}
+
 
 def get_spot_price() -> float | None:
-    data = _get(f"{BINANCE_REST}/api/v3/ticker/price", {"symbol": "BTCUSDT"})
-    return float(data["price"]) if data else None
+    m = _cg_market()
+    v = m.get("current_price")
+    return float(v) if v else None
 
 
 def get_24h_stats() -> dict:
-    data = _get(f"{BINANCE_REST}/api/v3/ticker/24hr", {"symbol": "BTCUSDT"})
-    if not data:
+    m = _cg_market()
+    if not m:
         return {}
     return {
-        "change_pct": float(data["priceChangePercent"]),
-        "high": float(data["highPrice"]),
-        "low": float(data["lowPrice"]),
-        "volume_usd": float(data["quoteVolume"]),
+        "change_pct": float(m.get("price_change_percentage_24h") or 0),
+        "high":        float(m.get("high_24h") or 0),
+        "low":         float(m.get("low_24h") or 0),
+        "volume_usd":  float(m.get("total_volume") or 0),
     }
 
 
-def get_ohlc(interval: str = "1d", limit: int = 50) -> pd.DataFrame | None:
-    data = _get(
-        f"{BINANCE_REST}/api/v3/klines",
-        {"symbol": "BTCUSDT", "interval": interval, "limit": limit},
-    )
-    if not data:
+# ── OHLC  (Kraken — no geo restrictions, 720 daily candles) ──────────────────
+
+def get_ohlc(interval: str = "1d", limit: int = 250) -> pd.DataFrame | None:
+    """Daily OHLC from Kraken.  `interval` param kept for API compat but only
+    daily is used; `limit` is how many most-recent candles to keep."""
+    data = _get(f"{KRAKEN}/OHLC", {"pair": "XBTUSD", "interval": 1440})
+    if not data or data.get("error"):
         return None
-    df = pd.DataFrame(data, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_vol", "num_trades", "tbb", "tbq", "ignore",
-    ])
+    result = data.get("result", {})
+    # Kraken result has one key for the pair (e.g. "XXBTZUSD") + "last"
+    pair_key = next((k for k in result if k != "last"), None)
+    if not pair_key:
+        return None
+    candles = result[pair_key]
+    # Each candle: [time, open, high, low, close, vwap, volume, count]
+    df = pd.DataFrame(candles, columns=["time", "open", "high", "low", "close", "vwap", "volume", "count"])
     for col in ("open", "high", "low", "close"):
         df[col] = df[col].astype(float)
-    df["date"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+    df["date"] = pd.to_datetime(df["time"].astype(int), unit="s", utc=True)
+    df = df.tail(limit).reset_index(drop=True)
     return df
 
 
@@ -201,22 +220,32 @@ def get_crypto_news() -> list[dict]:
     ]
 
 
-# ── Futures / Trend ───────────────────────────────────────────────────────────
+# ── Futures / Trend  (Bybit — no geo restrictions) ───────────────────────────
 
 def get_funding_rate() -> dict:
-    data = _get(f"{BINANCE_FUTURES}/fapi/v1/fundingRate", {"symbol": "BTCUSDT", "limit": 1})
-    if data and isinstance(data, list) and data:
-        item = data[-1]
+    data = _get(f"{BYBIT}/market/funding/history", {
+        "category": "linear", "symbol": "BTCUSDT", "limit": 1,
+    })
+    try:
+        item = data["result"]["list"][0]
         return {
-            "rate_pct": float(item["fundingRate"]) * 100,
-            "next_funding": datetime.fromtimestamp(item["fundingTime"] / 1000, tz=timezone.utc),
+            "rate_pct":    float(item["fundingRate"]) * 100,
+            "next_funding": datetime.fromtimestamp(
+                int(item["fundingRateTimestamp"]) / 1000, tz=timezone.utc
+            ),
         }
-    return {}
+    except Exception:
+        return {}
 
 
 def get_open_interest() -> float | None:
-    data = _get(f"{BINANCE_FUTURES}/fapi/v1/openInterest", {"symbol": "BTCUSDT"})
-    return float(data["openInterest"]) if data else None
+    data = _get(f"{BYBIT}/market/open-interest", {
+        "category": "linear", "symbol": "BTCUSDT", "intervalTime": "1h", "limit": 1,
+    })
+    try:
+        return float(data["result"]["list"][0]["openInterest"])
+    except Exception:
+        return None
 
 
 def get_etf_performance() -> list[dict]:
