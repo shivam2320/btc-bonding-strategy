@@ -146,13 +146,15 @@ def load_price_data() -> dict:
         "ohlc":    ohlc,
         "atr":     fetchers.compute_atr(ohlc),
         "emas":    fetchers.compute_emas(ohlc),
+        "vol":     fetchers.get_volatility_metrics(ohlc),
+        "rv":      fetchers.get_realized_vol(ohlc),        # 7d / 30d annualised realised vol
         "funding": fetchers.get_funding_rate(),
         "oi":      fetchers.get_open_interest(),
         "poly":    fetchers.get_polymarket_btc_markets(),   # returns (list, found_date)
     }
 
 
-# ── Slow cache: news/FF/ETF/vol — 5-min TTL, NOT cleared on Refresh ───────────
+# ── Slow cache: news/FF/ETF — 5-min TTL, NOT cleared on Refresh ──────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def load_slow_data() -> dict:
     ff, ff_error = [], False
@@ -162,11 +164,12 @@ def load_slow_data() -> dict:
         ff_error = True
 
     return {
-        "vol":      fetchers.get_volatility_metrics(),
-        "ff":       ff,
-        "ff_error": ff_error,
-        "news":     fetchers.get_crypto_news(),
-        "etf":      fetchers.get_etf_performance(),
+        "ff":         ff,
+        "ff_error":   ff_error,
+        "news":       fetchers.get_crypto_news(),
+        "etf_flows":  fetchers.get_etf_flows(),
+        "fear_greed": fetchers.get_fear_greed(),
+        "dvol":       fetchers.get_deribit_dvol(),
     }
 
 
@@ -266,22 +269,31 @@ with col_trend:
             unsafe_allow_html=True,
         )
 
-    st.markdown("<br><div class='sec-hdr'>BTC ETF Performance (1d)</div>", unsafe_allow_html=True)
+    st.markdown("<br><div class='sec-hdr'>BTC ETF Net Flows</div>", unsafe_allow_html=True)
 
-    etf = d["etf"]
-    if etf:
-        for e in etf:
-            color = "green" if e["change_pct"] > 0 else "red"
-            arrow = "▲" if e["change_pct"] > 0 else "▼"
+    etf_flows = d.get("etf_flows")
+    if etf_flows:
+        rows = [
+            ("Today",      etf_flows["today"]),
+            ("Last Week",  etf_flows["last_week"]),
+            ("Last Month", etf_flows["last_month"]),
+            ("3 Months",   etf_flows["three_months"]),
+        ]
+        for label, val in rows:
+            color = "green" if val > 0 else "red"
+            arrow = "▲" if val > 0 else "▼"
+            is_today = label == "Today"
+            weight = "font-size:1rem;" if is_today else "font-size:0.85rem;"
             st.markdown(
-                f"<div class='card'>"
-                f"<b>{e['ticker']}</b>&nbsp;&nbsp;${e['price']:.2f}"
-                f"&nbsp;&nbsp;<span class='{color}'>{arrow} {e['change_pct']:+.2f}%</span>"
+                f"<div class='card' style='padding:7px 14px;display:flex;"
+                f"justify-content:space-between;align-items:center'>"
+                f"<span class='muted'>{label}</span>"
+                f"<span class='{color}' style='{weight}'><b>{arrow} ${val:,.1f}M</b></span>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
     else:
-        st.markdown("<div class='card muted'>ETF data unavailable</div>", unsafe_allow_html=True)
+        st.markdown("<div class='card muted'>ETF flow data unavailable</div>", unsafe_allow_html=True)
 
 
 # ── COLUMN 2 · Trade Verdict ──────────────────────────────────────────────────
@@ -379,7 +391,79 @@ with col_verdict:
 
 # ── COLUMN 3 · Volatility Details ────────────────────────────────────────────
 with col_vol:
-    st.markdown("<div class='sec-hdr'>Volatility Analysis</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sec-hdr'>Live Volatility Signals</div>", unsafe_allow_html=True)
+
+    # ── Fear & Greed ──────────────────────────────────────────────────────────
+    fg = d.get("fear_greed")
+    if fg:
+        val   = fg["value"]
+        label = fg["classification"]
+        if val <= 25:
+            fg_color = "red"
+        elif val <= 45:
+            fg_color = "yellow"
+        elif val <= 55:
+            fg_color = "muted"
+        else:
+            fg_color = "green"
+        filled = round(val / 10)
+        bar    = "█" * filled + "░" * (10 - filled)
+        st.markdown(
+            f"<div class='card'>"
+            f"<span class='muted'>Fear & Greed</span>&nbsp;&nbsp;"
+            f"<span class='{fg_color}'><b>{val} — {label}</b></span><br>"
+            f"<span style='letter-spacing:2px;font-size:0.8rem;color:#7d8590'>{bar}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Realised vol ──────────────────────────────────────────────────────────
+    rv = d.get("rv")
+    if rv:
+        rv7, rv30     = rv["rv7"], rv["rv30"]
+        expanding     = rv7 > rv30
+        rv_color      = "red" if expanding else "green"
+        rv_arrow      = "▲" if expanding else "▼"
+        rv_label      = "Expanding" if expanding else "Contracting"
+        st.markdown(
+            f"<div class='card'>"
+            f"<span class='muted'>Realised Vol</span><br>"
+            f"<span class='muted' style='font-size:0.75rem'>7d</span>&nbsp;"
+            f"<b>{rv7:.1f}%</b>"
+            f"&nbsp;&nbsp;<span class='muted' style='font-size:0.75rem'>30d</span>&nbsp;"
+            f"<b>{rv30:.1f}%</b>"
+            f"<br><span class='{rv_color}' style='font-size:0.75rem'>"
+            f"{rv_arrow} Vol {rv_label} (7d {'>' if expanding else '<'} 30d)</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Deribit DVOL ──────────────────────────────────────────────────────────
+    dvol = d.get("dvol")
+    if dvol:
+        if dvol < 50:
+            dvol_color, dvol_label = "green",  "Low"
+        elif dvol < 80:
+            dvol_color, dvol_label = "yellow", "Moderate"
+        else:
+            dvol_color, dvol_label = "red",    "High"
+        daily_move_pct = dvol / (365 ** 0.5)
+        daily_move_usd = f"&nbsp;·&nbsp; ${daily_move_pct / 100 * spot:,.0f}" if spot else ""
+        st.markdown(
+            f"<div class='card'>"
+            f"<span class='muted'>Deribit DVOL (30d IV)</span>"
+            f"&nbsp;&nbsp;<b>{dvol:.1f}</b>"
+            f"&nbsp;&nbsp;<span class='{dvol_color}'>{dvol_label}</span><br>"
+            f"<span class='muted' style='font-size:0.75rem'>Expected daily move: "
+            f"<b class='blue'>{daily_move_pct:.2f}%</b>{daily_move_usd}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    if not fg and not rv and not dvol:
+        st.markdown("<div class='card muted'>Live signals unavailable</div>", unsafe_allow_html=True)
+
+    st.markdown("<br><div class='sec-hdr'>Historical Volatility</div>", unsafe_allow_html=True)
 
     def _vol_table(m: dict, label: str) -> None:
         st.markdown(f"<div class='sec-hdr' style='margin-top:6px'>{label}</div>", unsafe_allow_html=True)
@@ -425,18 +509,6 @@ with col_vol:
             unsafe_allow_html=True,
         )
 
-    if spot and atr:
-        st.markdown("<br><div class='sec-hdr'>Strike Distance Guide</div>", unsafe_allow_html=True)
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>Spot</span> ${spot:,.0f}<br>"
-            f"<span class='muted'>+1 ATR</span> ${spot+atr:,.0f}&nbsp;&nbsp;"
-            f"<span class='muted'>−1 ATR</span> ${spot-atr:,.0f}<br>"
-            f"<span class='muted'>+2 ATR</span> ${spot+2*atr:,.0f}&nbsp;&nbsp;"
-            f"<span class='muted'>−2 ATR</span> ${spot-2*atr:,.0f}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
 
 
 # ── Row 3: Polymarket Markets ─────────────────────────────────────────────────
@@ -513,7 +585,7 @@ else:
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
     f"<span class='muted' style='font-size:0.72rem'>"
-    f"Data sources: Binance · Kraken · Bybit/OKX · CoinGecko · ForexFactory · CryptoCompare · Polymarket Gamma API · Yahoo Finance · "
+    f"Data sources: Binance · Kraken · Bybit/OKX · Deribit · Alternative.me · Farside · ForexFactory · CryptoCompare · Polymarket Gamma API · "
     f"Local OHLC CSVs &nbsp;|&nbsp; Cache TTL: 60s &nbsp;|&nbsp; "
     f"Last loaded: {now_utc.strftime('%H:%M:%S')} UTC"
     f"</span>",

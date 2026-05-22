@@ -94,9 +94,9 @@ def get_btc_market() -> dict:
 
 # ── OHLC  (Kraken — no geo restrictions, 720 daily candles) ──────────────────
 
-def get_ohlc(interval: str = "1d", limit: int = 250) -> pd.DataFrame | None:
+def get_ohlc(interval: str = "1d", limit: int = 720) -> pd.DataFrame | None:
     """Daily OHLC from Kraken.  `interval` param kept for API compat but only
-    daily is used; `limit` is how many most-recent candles to keep."""
+    daily is used; `limit` is how many most-recent candles to keep (720 ≈ 2 years)."""
     data = _get(f"{KRAKEN}/OHLC", {"pair": "XBTUSD", "interval": 1440})
     if not data or data.get("error"):
         return None
@@ -151,25 +151,30 @@ def _vol_metrics_for(daily: "pd.DataFrame") -> dict:
     }
 
 
-def get_volatility_metrics() -> dict | None:
+def get_volatility_metrics(ohlc: "pd.DataFrame | None" = None) -> dict | None:
+    """Compute volatility metrics.
+
+    Primary: slice `ohlc` (Kraken live data — always current).
+    Fallback: load from local CSVs (stale but better than nothing).
+    """
+    if ohlc is not None and len(ohlc) >= 30:
+        try:
+            m1 = _vol_metrics_for(ohlc.tail(30))
+            m6 = _vol_metrics_for(ohlc.tail(180)) if len(ohlc) >= 180 else None
+            return {"1m": m1, "6m": m6}
+        except Exception:
+            pass
+
+    # CSV fallback (local dev / Kraken outage)
     try:
         from btc_volatility_analysis import (  # type: ignore
             daily_ohlc_from_hourly,
             load_ohlc,
         )
-
         path_1m = ROOT / "BTCUSD_1M_1HOUR_FROM_PERPLEXITY (1).csv"
         path_6m = ROOT / "BTCUSD_6M_1DAY_FROM_PERPLEXITY (1).csv"
-
-        m1 = None
-        if path_1m.exists():
-            daily_1m = daily_ohlc_from_hourly(load_ohlc(path_1m))
-            m1 = _vol_metrics_for(daily_1m)
-
-        m6 = None
-        if path_6m.exists():
-            m6 = _vol_metrics_for(load_ohlc(path_6m))
-
+        m1 = _vol_metrics_for(daily_ohlc_from_hourly(load_ohlc(path_1m))) if path_1m.exists() else None
+        m6 = _vol_metrics_for(load_ohlc(path_6m)) if path_6m.exists() else None
         if m1 is None and m6 is None:
             return None
         return {"1m": m1, "6m": m6}
@@ -287,27 +292,70 @@ def get_open_interest() -> float | None:
         return None
 
 
-def get_etf_performance() -> list[dict]:
-    tickers = ["IBIT", "FBTC", "BITB", "ARKB"]
-    results = []
-    for ticker in tickers:
-        data = _get(
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
-            {"interval": "1d", "range": "5d"},
-            timeout=8,
-        )
-        try:
-            closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-            closes = [c for c in closes if c is not None]
-            if len(closes) >= 2:
-                results.append({
-                    "ticker": ticker,
-                    "price": closes[-1],
-                    "change_pct": (closes[-1] / closes[-2] - 1) * 100,
-                })
-        except Exception:
-            pass
-    return results
+def get_etf_flows() -> dict | None:
+    """BTC ETF aggregate net flows from CoinMarketCap (no API key required)."""
+    data = _get(
+        "https://api.coinmarketcap.com/data-api/v3/etf/netflow/metrics",
+        {"category": "btc"},
+        timeout=10,
+    )
+    try:
+        d = data["data"]
+        return {
+            "today":        d["current"]["value"]       / 1e6,
+            "last_week":    d["lastWeek"]["value"]      / 1e6,
+            "last_month":   d["lastMonth"]["value"]     / 1e6,
+            "three_months": d["threeMonthsAgo"]["value"] / 1e6,
+        }
+    except Exception:
+        return None
+
+
+# ── Fear & Greed Index ────────────────────────────────────────────────────────
+
+def get_fear_greed() -> dict | None:
+    data = _get("https://api.alternative.me/fng/", {"limit": 1})
+    try:
+        item = data["data"][0]
+        return {
+            "value":          int(item["value"]),
+            "classification": item["value_classification"],
+        }
+    except Exception:
+        return None
+
+
+# ── Realized Volatility (7d / 30d annualised) ─────────────────────────────────
+
+def get_realized_vol(ohlc: "pd.DataFrame | None") -> dict | None:
+    if ohlc is None or len(ohlc) < 31:
+        return None
+    try:
+        closes  = ohlc["close"].astype(float)
+        log_ret = np.log(closes / closes.shift(1)).dropna()
+        rv7  = float(log_ret.tail(7).std()  * np.sqrt(252) * 100)
+        rv30 = float(log_ret.tail(30).std() * np.sqrt(252) * 100)
+        return {"rv7": rv7, "rv30": rv30}
+    except Exception:
+        return None
+
+
+# ── Deribit DVOL (BTC 30-day constant-maturity implied vol index) ─────────────
+
+def get_deribit_dvol() -> float | None:
+    now_ms   = int(datetime.now(timezone.utc).timestamp() * 1000)
+    start_ms = now_ms - 2 * 3_600_000          # 2-hour window → 1 candle at 1h resolution
+    data = _get(
+        "https://www.deribit.com/api/v2/public/get_volatility_index_data",
+        {"currency": "BTC", "start_timestamp": start_ms,
+         "end_timestamp": now_ms, "resolution": 3600},
+        timeout=10,
+    )
+    try:
+        candles = data["result"]["data"]        # [[ts, open, high, low, close], ...]
+        return float(candles[-1][4])            # close of last candle
+    except Exception:
+        return None
 
 
 # ── Polymarket ────────────────────────────────────────────────────────────────
