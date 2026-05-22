@@ -52,35 +52,31 @@ def _get(
         return None
 
 
-# ── BTC Price  (CoinGecko — no geo restrictions) ──────────────────────────────
+# ── BTC Price  (CoinGecko simple/price → Coinbase fallback) ──────────────────
 
-def _cg_market() -> dict:
-    """Fetch BTC market data (spot, 24h high/low/change/vol) from CoinGecko."""
-    data = _get(f"{COINGECKO}/coins/markets", {
-        "vs_currency": "usd",
+def get_btc_market() -> dict:
+    """One lightweight CoinGecko call → spot, 24h change%, vol.
+    Falls back to Coinbase for spot if CoinGecko is unavailable.
+    24h high/low are derived from Kraken OHLC in load_price_data().
+    """
+    data = _get(f"{COINGECKO}/simple/price", {
         "ids": "bitcoin",
+        "vs_currencies": "usd",
+        "include_24hr_change": "true",
+        "include_24hr_vol": "true",
     })
-    if data and isinstance(data, list) and data:
-        return data[0]
-    return {}
-
-
-def get_spot_price() -> float | None:
-    m = _cg_market()
-    v = m.get("current_price")
-    return float(v) if v else None
-
-
-def get_24h_stats() -> dict:
-    m = _cg_market()
-    if not m:
-        return {}
-    return {
-        "change_pct": float(m.get("price_change_percentage_24h") or 0),
-        "high":        float(m.get("high_24h") or 0),
-        "low":         float(m.get("low_24h") or 0),
-        "volume_usd":  float(m.get("total_volume") or 0),
-    }
+    if data and "bitcoin" in data:
+        btc = data["bitcoin"]
+        return {
+            "spot":       float(btc.get("usd") or 0) or None,
+            "change_pct": float(btc.get("usd_24h_change") or 0),
+            "volume_usd": float(btc.get("usd_24h_vol") or 0),
+        }
+    # Coinbase fallback — spot only, no 24h stats
+    cb = _get("https://api.coinbase.com/v2/prices/BTC-USD/spot")
+    if cb and cb.get("data", {}).get("amount"):
+        return {"spot": float(cb["data"]["amount"]), "change_pct": 0.0, "volume_usd": 0.0}
+    return {"spot": None, "change_pct": 0.0, "volume_usd": 0.0}
 
 
 # ── OHLC  (Kraken — no geo restrictions, 720 daily candles) ──────────────────
@@ -227,9 +223,13 @@ def get_crypto_news() -> list[dict]:
     ]
 
 
-# ── Futures / Trend  (Bybit — no geo restrictions) ───────────────────────────
+# ── Futures / Trend  (Bybit → OKX fallback) ──────────────────────────────────
+
+OKX = "https://www.okx.com/api/v5"
+
 
 def get_funding_rate() -> dict:
+    # Bybit
     data = _get(f"{BYBIT}/market/funding/history", {
         "category": "linear", "symbol": "BTCUSDT", "limit": 1,
     })
@@ -242,15 +242,34 @@ def get_funding_rate() -> dict:
             ),
         }
     except Exception:
+        pass
+    # OKX fallback
+    data = _get(f"{OKX}/public/funding-rate", {"instId": "BTC-USD-SWAP"})
+    try:
+        item = data["data"][0]
+        return {
+            "rate_pct":    float(item["fundingRate"]) * 100,
+            "next_funding": datetime.fromtimestamp(
+                int(item["nextFundingTime"]) / 1000, tz=timezone.utc
+            ),
+        }
+    except Exception:
         return {}
 
 
 def get_open_interest() -> float | None:
+    # Bybit
     data = _get(f"{BYBIT}/market/open-interest", {
         "category": "linear", "symbol": "BTCUSDT", "intervalTime": "1h", "limit": 1,
     })
     try:
         return float(data["result"]["list"][0]["openInterest"])
+    except Exception:
+        pass
+    # OKX fallback
+    data = _get(f"{OKX}/public/open-interest", {"instId": "BTC-USD-SWAP"})
+    try:
+        return float(data["data"][0]["oi"])
     except Exception:
         return None
 
@@ -308,17 +327,27 @@ def active_session_date() -> tuple[date, datetime, datetime]:
     return market_date, session_start, session_end
 
 
-def get_polymarket_btc_markets(target_date: date | None = None) -> list[dict]:
+def _find_polymarket_event(start_date: date) -> tuple[dict | None, date | None]:
+    """Try start_date ±3 days to find the nearest available BTC daily event."""
+    from itertools import chain
+    # Try today, then +1, +2, +3 days ahead, then -1, -2, -3 days back
+    offsets = list(range(0, 4)) + list(range(-1, -4, -1))
+    for delta in offsets:
+        d = start_date + timedelta(days=delta)
+        slug = f"bitcoin-above-on-{d.strftime('%B').lower()}-{d.day}"
+        data = _get(f"{GAMMA_API}/events/slug/{slug}", timeout=12)
+        if data and data.get("markets"):
+            return data, d
+    return None, None
+
+
+def get_polymarket_btc_markets(target_date: date | None = None) -> tuple[list[dict], date | None]:
     if target_date is None:
         target_date, _, _ = active_session_date()
 
-    month_name = target_date.strftime("%B").lower()
-    day = target_date.day
-    slug = f"bitcoin-above-on-{month_name}-{day}"
-
-    data = _get(f"{GAMMA_API}/events/slug/{slug}", timeout=12)
+    data, found_date = _find_polymarket_event(target_date)
     if not data:
-        return []
+        return [], None
 
     results = []
     for m in data.get("markets", []):
@@ -345,4 +374,4 @@ def get_polymarket_btc_markets(target_date: date | None = None) -> list[dict]:
         })
 
     results.sort(key=lambda x: x["strike"] or 0)
-    return results
+    return results, found_date

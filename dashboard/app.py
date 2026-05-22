@@ -122,19 +122,32 @@ with hc3:
 st.markdown("<hr>", unsafe_allow_html=True)
 
 
-# ── Fast cache: price/futures data — 30s TTL, cleared on Refresh ──────────────
-@st.cache_data(ttl=30, show_spinner=False)
+# ── Fast cache: price/futures data — 60s TTL, cleared on Refresh ──────────────
+@st.cache_data(ttl=60, show_spinner=False)
 def load_price_data() -> dict:
-    ohlc = fetchers.get_ohlc(interval="1d", limit=50)
+    ohlc    = fetchers.get_ohlc()          # Kraken daily, 250 candles
+    market  = fetchers.get_btc_market()    # CoinGecko → Coinbase fallback
+
+    # Derive 24h high/low from Kraken OHLC last (current) candle
+    h24, l24 = 0.0, 0.0
+    if ohlc is not None and not ohlc.empty:
+        last = ohlc.iloc[-1]
+        h24, l24 = float(last["high"]), float(last["low"])
+
     return {
-        "spot":    fetchers.get_spot_price(),
-        "stats24": fetchers.get_24h_stats(),
+        "spot":    market.get("spot"),
+        "stats24": {
+            "change_pct": market.get("change_pct", 0.0),
+            "high":        h24,
+            "low":         l24,
+            "volume_usd":  market.get("volume_usd", 0.0),
+        },
         "ohlc":    ohlc,
         "atr":     fetchers.compute_atr(ohlc),
         "emas":    fetchers.compute_emas(ohlc),
         "funding": fetchers.get_funding_rate(),
         "oi":      fetchers.get_open_interest(),
-        "poly":    fetchers.get_polymarket_btc_markets(),
+        "poly":    fetchers.get_polymarket_btc_markets(),   # returns (list, found_date)
     }
 
 
@@ -203,16 +216,19 @@ col_trend, col_verdict, col_vol = st.columns([1, 1.1, 1.2], gap="medium")
 with col_trend:
     st.markdown("<div class='sec-hdr'>Trend Analysis · EMA</div>", unsafe_allow_html=True)
 
-    if emas and spot:
+    if emas:
         for period, val in emas.items():
-            diff_pct = (spot - val) / val * 100
-            color = "green" if diff_pct > 0 else "red"
-            arrow = "▲" if diff_pct > 0 else "▼"
+            if spot:
+                diff_pct = (spot - val) / val * 100
+                color = "green" if diff_pct > 0 else "red"
+                arrow = "▲" if diff_pct > 0 else "▼"
+                diff_str = f"&nbsp;&nbsp;<span class='{color}'>{arrow} {diff_pct:+.2f}%</span>"
+            else:
+                diff_str = ""
             st.markdown(
                 f"<div class='card'>"
                 f"<span class='muted'>EMA {period}</span>&nbsp;&nbsp;"
-                f"<b>${val:,.0f}</b>&nbsp;&nbsp;"
-                f"<span class='{color}'>{arrow} {diff_pct:+.2f}%</span>"
+                f"<b>${val:,.0f}</b>{diff_str}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -434,11 +450,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-poly = d["poly"]
+poly_list, found_date = d["poly"]
 
-if poly and spot:
+if found_date and found_date != market_date:
+    st.markdown(
+        f"<div class='news-card' style='border-left-color:#d29922;margin-bottom:8px'>"
+        f"<span class='yellow'>⚠ {market_date.strftime('%d %b')} markets not yet listed — "
+        f"showing {found_date.strftime('%d %b %Y')} instead.</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+if poly_list and spot:
     rows = []
-    for m in poly:
+    for m in poly_list:
         strike = m["strike"]
         diff_usd = (spot - strike) if strike else None
         diff_pct = (diff_usd / strike * 100) if strike else None
@@ -450,12 +475,12 @@ if poly and spot:
             direction = "▲ ITM" if diff_usd > 0 else "▼ OTM"
 
         rows.append({
-            "Strike ($)":    f"${strike:,.0f}"        if strike           else "—",
-            "Spot − Strike": f"${diff_usd:+,.0f}"     if diff_usd is not None else "—",
-            "Diff %":        f"{diff_pct:+.2f}%"       if diff_pct is not None else "—",
+            "Strike ($)":    f"${strike:,.0f}"          if strike           else "—",
+            "Spot − Strike": f"${diff_usd:+,.0f}"       if diff_usd is not None else "—",
+            "Diff %":        f"{diff_pct:+.2f}%"         if diff_pct is not None else "—",
             "Position":      direction,
-            "YES (¢)":       f"{yes_p*100:.1f}¢"       if yes_p is not None else "—",
-            "NO (¢)":        f"{no_p*100:.1f}¢"        if no_p  is not None else "—",
+            "YES (¢)":       f"{yes_p*100:.1f}¢"         if yes_p is not None else "—",
+            "NO (¢)":        f"{no_p*100:.1f}¢"          if no_p  is not None else "—",
             "Volume ($)":    f"${m['volume']:,.0f}",
             "Question":      m["question"],
         })
@@ -463,7 +488,7 @@ if poly and spot:
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
-elif poly:
+elif poly_list:
     st.info("Spot price unavailable — showing raw Polymarket data.")
     rows = [
         {
@@ -473,13 +498,13 @@ elif poly:
             "Volume ($)": f"${m['volume']:,.0f}",
             "Question":   m["question"],
         }
-        for m in poly
+        for m in poly_list
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 else:
     st.info(
-        f"No Polymarket BTC markets found for {market_date.strftime('%d %b %Y')}. "
-        "Markets may not be listed yet or have already expired."
+        f"No Polymarket BTC markets found near {market_date.strftime('%d %b %Y')} "
+        "(checked ±3 days). Markets may not be listed yet."
     )
 
 
@@ -487,7 +512,7 @@ else:
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
     f"<span class='muted' style='font-size:0.72rem'>"
-    f"Data sources: Binance REST · ForexFactory · CryptoCompare · Polymarket Gamma API · Yahoo Finance · "
+    f"Data sources: CoinGecko · Kraken · Bybit/OKX · ForexFactory · CryptoCompare · Polymarket Gamma API · Yahoo Finance · "
     f"Local OHLC CSVs &nbsp;|&nbsp; Cache TTL: 60s &nbsp;|&nbsp; "
     f"Last loaded: {now_utc.strftime('%H:%M:%S')} UTC"
     f"</span>",
