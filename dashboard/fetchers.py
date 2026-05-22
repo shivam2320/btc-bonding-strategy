@@ -32,11 +32,18 @@ class RateLimitedError(Exception):
     pass
 
 
-def _get(url: str, params: dict | None = None, timeout: int = 8) -> dict | list | None:
+def _get(
+    url: str,
+    params: dict | None = None,
+    timeout: int = 8,
+    raise_on_429: bool = False,
+) -> dict | list | None:
     try:
         r = _SESS.get(url, params=params, timeout=timeout)
         if r.status_code == 429:
-            raise RateLimitedError(url)
+            if raise_on_429:
+                raise RateLimitedError(url)
+            return None
         r.raise_for_status()
         return r.json()
     except RateLimitedError:
@@ -172,7 +179,7 @@ def get_forex_factory_events(today: date | None = None) -> list[dict]:
     """
     if today is None:
         today = datetime.now(IST).date()
-    data = _get("https://nfs.faireconomy.media/ff_calendar_thisweek.json", timeout=10)  # raises RateLimitedError on 429
+    data = _get("https://nfs.faireconomy.media/ff_calendar_thisweek.json", timeout=10, raise_on_429=True)
     if not data:
         return []
     events = []
