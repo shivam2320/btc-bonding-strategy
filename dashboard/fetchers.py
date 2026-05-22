@@ -341,16 +341,34 @@ def active_session_date() -> tuple[date, datetime, datetime]:
 
 
 def _find_polymarket_event(start_date: date) -> tuple[dict | None, date | None]:
-    """Try start_date ±3 days to find the nearest available BTC daily event."""
-    from itertools import chain
-    # Try today, then +1, +2, +3 days ahead, then -1, -2, -3 days back
+    """Try slug patterns ±3 days to find the nearest available BTC daily event.
+    Tries both 'bitcoin-above-on-may-22' and 'bitcoin-above-on-may-22-2026' variants.
+    Falls back to Gamma market search API if all slug attempts fail.
+    """
     offsets = list(range(0, 4)) + list(range(-1, -4, -1))
     for delta in offsets:
         d = start_date + timedelta(days=delta)
-        slug = f"bitcoin-above-on-{d.strftime('%B').lower()}-{d.day}"
-        data = _get(f"{GAMMA_API}/events/slug/{slug}", timeout=12)
-        if data and data.get("markets"):
-            return data, d
+        month = d.strftime('%B').lower()
+        for slug in (
+            f"bitcoin-above-on-{month}-{d.day}",
+            f"bitcoin-above-on-{month}-{d.day}-{d.year}",
+        ):
+            data = _get(f"{GAMMA_API}/events/slug/{slug}", timeout=12)
+            if data and data.get("markets"):
+                return data, d
+
+    # Last resort: keyword search on the Gamma markets API for start_date
+    month = start_date.strftime('%B').lower()
+    mdata = _get(
+        f"{GAMMA_API}/markets",
+        {"search": f"bitcoin above {month} {start_date.day}", "active": "true", "limit": 30},
+        timeout=12,
+    )
+    if mdata and isinstance(mdata, list):
+        btc_markets = [m for m in mdata if _parse_strike(m.get("question", "")) is not None]
+        if btc_markets:
+            return {"markets": btc_markets}, start_date
+
     return None, None
 
 
