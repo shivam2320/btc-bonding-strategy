@@ -19,6 +19,7 @@ import requests
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "backtest"))
 
+BINANCE   = "https://api.binance.com"
 COINGECKO = "https://api.coingecko.com/api/v3"
 KRAKEN    = "https://api.kraken.com/0/public"
 BYBIT     = "https://api.bybit.com/v5"
@@ -52,31 +53,43 @@ def _get(
         return None
 
 
-# ── BTC Price  (CoinGecko simple/price → Coinbase fallback) ──────────────────
+# ── BTC Price  (Binance → CoinGecko → Coinbase fallback) ─────────────────────
 
 def get_btc_market() -> dict:
-    """One lightweight CoinGecko call → spot, 24h change%, vol.
-    Falls back to Coinbase for spot if CoinGecko is unavailable.
-    24h high/low are derived from Kraken OHLC in load_price_data().
+    """Binance 24h ticker (primary) → CoinGecko → Coinbase fallback.
+    Returns spot, 24h change%, vol, high_24h, low_24h.
     """
+    # Binance global — single call gives spot + 24h stats + high/low
+    data = _get(f"{BINANCE}/api/v3/ticker/24hr", {"symbol": "BTCUSDT"})
+    if data and isinstance(data, dict) and data.get("lastPrice"):
+        return {
+            "spot":       float(data["lastPrice"]),
+            "change_pct": float(data.get("priceChangePercent") or 0),
+            "volume_usd": float(data.get("quoteVolume") or 0),
+            "high_24h":   float(data["highPrice"]) if data.get("highPrice") else None,
+            "low_24h":    float(data["lowPrice"])  if data.get("lowPrice")  else None,
+        }
+    # CoinGecko fallback — no high/low
     data = _get(f"{COINGECKO}/simple/price", {
         "ids": "bitcoin",
         "vs_currencies": "usd",
         "include_24hr_change": "true",
         "include_24hr_vol": "true",
     })
-    if data and "bitcoin" in data:
+    if data and isinstance(data, dict) and "bitcoin" in data:
         btc = data["bitcoin"]
         return {
             "spot":       float(btc.get("usd") or 0) or None,
             "change_pct": float(btc.get("usd_24h_change") or 0),
             "volume_usd": float(btc.get("usd_24h_vol") or 0),
+            "high_24h":   None,
+            "low_24h":    None,
         }
-    # Coinbase fallback — spot only, no 24h stats
+    # Coinbase fallback — spot only
     cb = _get("https://api.coinbase.com/v2/prices/BTC-USD/spot")
-    if cb and cb.get("data", {}).get("amount"):
-        return {"spot": float(cb["data"]["amount"]), "change_pct": 0.0, "volume_usd": 0.0}
-    return {"spot": None, "change_pct": 0.0, "volume_usd": 0.0}
+    if cb and isinstance(cb, dict) and cb.get("data", {}).get("amount"):
+        return {"spot": float(cb["data"]["amount"]), "change_pct": 0.0, "volume_usd": 0.0, "high_24h": None, "low_24h": None}
+    return {"spot": None, "change_pct": 0.0, "volume_usd": 0.0, "high_24h": None, "low_24h": None}
 
 
 # ── OHLC  (Kraken — no geo restrictions, 720 daily candles) ──────────────────

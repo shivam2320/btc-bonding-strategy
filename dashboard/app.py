@@ -125,12 +125,13 @@ st.markdown("<hr>", unsafe_allow_html=True)
 # ── Fast cache: price/futures data — 60s TTL, cleared on Refresh ──────────────
 @st.cache_data(ttl=60, show_spinner=False)
 def load_price_data() -> dict:
-    ohlc    = fetchers.get_ohlc()          # Kraken daily, 250 candles
-    market  = fetchers.get_btc_market()    # CoinGecko → Coinbase fallback
+    ohlc    = fetchers.get_ohlc()          # Kraken daily, 250 candles (ATR/EMA)
+    market  = fetchers.get_btc_market()    # Binance → CoinGecko → Coinbase fallback
 
-    # Derive 24h high/low from Kraken OHLC last (current) candle
-    h24, l24 = 0.0, 0.0
-    if ohlc is not None and not ohlc.empty:
+    # 24h high/low: prefer Binance (real-time), fall back to last Kraken OHLC candle
+    h24 = market.get("high_24h") or 0.0
+    l24 = market.get("low_24h")  or 0.0
+    if not h24 and ohlc is not None and not ohlc.empty:
         last = ohlc.iloc[-1]
         h24, l24 = float(last["high"]), float(last["low"])
 
@@ -512,7 +513,7 @@ else:
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
     f"<span class='muted' style='font-size:0.72rem'>"
-    f"Data sources: CoinGecko · Kraken · Bybit/OKX · ForexFactory · CryptoCompare · Polymarket Gamma API · Yahoo Finance · "
+    f"Data sources: Binance · Kraken · Bybit/OKX · CoinGecko · ForexFactory · CryptoCompare · Polymarket Gamma API · Yahoo Finance · "
     f"Local OHLC CSVs &nbsp;|&nbsp; Cache TTL: 60s &nbsp;|&nbsp; "
     f"Last loaded: {now_utc.strftime('%H:%M:%S')} UTC"
     f"</span>",
