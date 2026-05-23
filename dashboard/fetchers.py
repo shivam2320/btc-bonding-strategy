@@ -115,6 +115,23 @@ def get_ohlc(interval: str = "1d", limit: int = 720) -> pd.DataFrame | None:
     return df
 
 
+def get_session_open_price(session_start_ist: "datetime") -> float | None:
+    """BTC open price at session start (9:30 PM IST = 16:00 UTC) from Kraken 1h OHLC."""
+    utc = session_start_ist.astimezone(timezone.utc)
+    ts  = int(utc.timestamp())
+    data = _get(f"{KRAKEN}/OHLC", {"pair": "XBTUSD", "interval": 60, "since": ts - 60}, timeout=10)
+    try:
+        result   = data["result"]
+        pair_key = next(k for k in result if k != "last")
+        candles  = result[pair_key]
+        # First candle at or immediately after session start
+        for c in candles:
+            if int(c[0]) >= ts - 120:          # within 2 min of session open
+                return float(c[1])             # open price
+    except Exception:
+        return None
+
+
 def compute_atr(df: pd.DataFrame, period: int = 14) -> float | None:
     if df is None or len(df) < period + 1:
         return None

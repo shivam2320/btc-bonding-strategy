@@ -125,8 +125,10 @@ st.markdown("<hr>", unsafe_allow_html=True)
 # ── Fast cache: price/futures data — 60s TTL, cleared on Refresh ──────────────
 @st.cache_data(ttl=60, show_spinner=False)
 def load_price_data() -> dict:
-    ohlc    = fetchers.get_ohlc()          # Kraken daily, 250 candles (ATR/EMA)
-    market  = fetchers.get_btc_market()    # Binance → CoinGecko → Coinbase fallback
+    ohlc    = fetchers.get_ohlc()
+    market  = fetchers.get_btc_market()
+    _, session_start, _ = fetchers.active_session_date()
+    session_open = fetchers.get_session_open_price(session_start)
 
     # 24h high/low: prefer Binance (real-time), fall back to last Kraken OHLC candle
     h24 = market.get("high_24h") or 0.0
@@ -146,8 +148,9 @@ def load_price_data() -> dict:
         "ohlc":    ohlc,
         "atr":     fetchers.compute_atr(ohlc),
         "emas":    fetchers.compute_emas(ohlc),
+        "session_open": session_open,
         "vol":     fetchers.get_volatility_metrics(ohlc),
-        "rv":      fetchers.get_realized_vol(ohlc),        # 7d / 30d annualised realised vol
+        "rv":      fetchers.get_realized_vol(ohlc),
         "funding": fetchers.get_funding_rate(),
         "oi":      fetchers.get_open_interest(),
         "poly":    fetchers.get_polymarket_btc_markets(),   # returns (list, found_date)
@@ -188,6 +191,33 @@ atr     = d["atr"]
 emas    = d["emas"]
 vol     = d["vol"]
 
+# Session info — computed fresh each render (no API call)
+market_date, session_start, session_end = fetchers.active_session_date()
+session_open = d.get("session_open")
+
+# ── Session strip ─────────────────────────────────────────────────────────────
+remaining     = session_end - now_ist
+total_secs    = max(0, int(remaining.total_seconds()))
+hours, r      = divmod(total_secs, 3600)
+mins          = r // 60
+countdown_str = f"{hours}h {mins:02d}m"
+
+ss1, ss2, ss3, ss4 = st.columns(4)
+with ss1:
+    st.metric("Session Open (BTC)", f"${session_open:,.0f}" if session_open else "—")
+with ss2:
+    if session_open and spot:
+        sess_diff     = spot - session_open
+        sess_diff_pct = sess_diff / session_open * 100
+        st.metric("Move Since Open", f"${sess_diff:+,.0f}", delta=f"{sess_diff_pct:+.2f}%")
+    else:
+        st.metric("Move Since Open", "—")
+with ss3:
+    st.metric("Session Ends", session_end.strftime("%d %b %H:%M IST"))
+with ss4:
+    st.metric("Time Remaining", countdown_str)
+
+st.markdown("<hr>", unsafe_allow_html=True)
 
 # ── Row 1: Key price metrics ──────────────────────────────────────────────────
 mc = st.columns(6)
@@ -511,10 +541,169 @@ with col_vol:
 
 
 
-# ── Row 3: Polymarket Markets ─────────────────────────────────────────────────
+# Unpack poly data — market_date/session_start/session_end already computed above
+poly_list, found_date = d["poly"]
+
+
+# ── Row 3: AI Analysis ────────────────────────────────────────────────────────
 st.markdown("<hr>", unsafe_allow_html=True)
 
-market_date, session_start, session_end = fetchers.active_session_date()
+ai_hdr, ai_btn = st.columns([5, 1])
+with ai_hdr:
+    st.markdown("<div class='sec-hdr'>AI Analysis · Bonding Strategy</div>", unsafe_allow_html=True)
+with ai_btn:
+    run_ai = st.button("🤖 Analyze", use_container_width=True)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_ai_analysis(
+    spot, change_pct,
+    ema20, ema50, ema200,
+    atr,
+    vol1m_hl_pct, vol6m_hl_pct,
+    dvol, daily_move_pct,
+    rv7, rv30,
+    fg_val, fg_label,
+    funding_rate,
+    etf_flow_today,
+    ff_count,
+    poly_summary,
+) -> str:
+    api_key = st.secrets.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return "⚠ Add `OPENROUTER_API_KEY` to Streamlit secrets to enable AI analysis."
+
+    def _fmt(val, fmt, prefix="", suffix=""):
+        return f"{prefix}{val:{fmt}}{suffix}" if val is not None else "N/A"
+
+    context = f"""BTC MARKET SNAPSHOT
+Spot: {_fmt(spot, ",.0f", "$")}  |  24h change: {_fmt(change_pct, "+.2f", suffix="%")}
+EMA20: {_fmt(ema20, ",.0f", "$")}  |  EMA50: {_fmt(ema50, ",.0f", "$")}  |  EMA200: {_fmt(ema200, ",.0f", "$")}
+ATR (14d): {_fmt(atr, ",.0f", "$")}
+Avg daily H-L% 1M: {_fmt(vol1m_hl_pct, ".2f", suffix="%")}  |  6M: {_fmt(vol6m_hl_pct, ".2f", suffix="%")}
+Deribit DVOL: {_fmt(dvol, ".1f")}  |  Expected daily move: {_fmt(daily_move_pct, ".2f", suffix="%")}
+Realised vol — 7d: {_fmt(rv7, ".1f", suffix="%")}  |  30d: {_fmt(rv30, ".1f", suffix="%")}{"  (EXPANDING)" if rv7 and rv30 and rv7 > rv30 else "  (CONTRACTING)" if rv7 and rv30 else ""}
+Fear & Greed: {fg_val if fg_val is not None else "N/A"} — {fg_label}
+Funding rate: {_fmt(funding_rate, "+.4f", suffix="%")}
+ETF net flow today: {_fmt(etf_flow_today, "+,.1f", "$", "M")}
+High-impact macro events today: {ff_count}
+
+POLYMARKET BTC MARKETS (today's session)
+{poly_summary}"""
+
+    prompt = f"""{context}
+
+STRATEGY: Polymarket BTC daily BONDING strategy.
+- Target YES or NO tokens priced between 99¢ and 99.9¢ (marked ★ in the market data).
+- YES bond: buy YES in (99¢, 99.9¢) when spot is well ABOVE strike → profit if BTC stays above strike.
+- NO bond: buy NO in (99¢, 99.9¢) when spot is well BELOW strike → profit if BTC stays below strike.
+- Profit = 100¢ − entry price (0.1¢ to 1¢ per token). Session ends 9:30 PM IST.
+- Prices at 100¢ offer NO profit margin — ignore them. Prices below 99¢ carry too much risk.
+- This is NOT directional speculation. We exploit near-certain outcomes with defined cushion.
+
+CUSHION ANALYSIS: Safety ratio = (spot − strike) ÷ expected daily move
+  > 2.0 → strong  |  1.5–2.0 → acceptable  |  < 1.5 → avoid
+
+Respond in EXACTLY this format (2–3 sentences each, specific numbers required):
+
+**TRADE DECISION**: [TRADE / SKIP / CAUTION]
+[Driven by today's news and volatility only. Cite: macro events count, DVOL level, vol regime (expanding/contracting), ETF flows, Fear & Greed. TRADE = calm environment; CAUTION = one risk factor; SKIP = multiple risks stacking up or no valid bond exists.]
+
+**TREND**:
+[BTC price action and momentum. Where is spot relative to EMA20/50/200? Is the move today continuation or reversal? What does the 24h change and funding rate suggest about near-term direction? This informs which side (YES or NO bond) has more tailwind.]
+
+**RISK ASSESSMENT**:
+[What specific events or conditions could cause BTC to breach the target strike during this session? Quantify: how many expected daily moves would need to occur? Reference ATR, historical max H-L, and any macro catalysts. This is about TAIL RISK, not trend.]
+
+**STRIKE SELECTION**:
+[Name the exact strike, YES or NO, and its entry price in ¢ (must be between 99¢ and 99.9¢). State the cushion in USD and the safety ratio. Explain in one sentence what single event would invalidate this trade.]"""
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+            default_headers={"X-Title": "BTC Trade Dashboard"},
+        )
+        resp = client.chat.completions.create(
+            model="openrouter/free",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        return f"Analysis unavailable: {e}"
+
+
+if run_ai:
+    load_ai_analysis.clear()
+
+# Build poly summary string for the prompt — flag bonding opportunities explicitly
+if poly_list and spot:
+    _poly_lines = []
+    for m in poly_list[:15]:
+        if m["strike"] and m["yes_price"] is not None:
+            diff   = spot - m["strike"]
+            yes_c  = m["yes_price"] * 100
+            no_c   = m["no_price"]  * 100 if m["no_price"] else 0
+            if 99 < yes_c < 99.9:
+                flag = "  ★ YES BOND"
+            elif 99 < no_c < 99.9:
+                flag = "  ★ NO BOND"
+            elif 97 <= yes_c <= 99:
+                flag = "  (YES near-bond)"
+            elif 97 <= no_c <= 99:
+                flag = "  (NO near-bond)"
+            else:
+                flag = ""
+            _poly_lines.append(
+                f"  Strike ${m['strike']:,.0f}"
+                f"  spot {'above' if diff > 0 else 'below'} by ${abs(diff):,.0f}"
+                f"  YES={yes_c:.0f}¢  NO={no_c:.0f}¢"
+                f"  Vol=${m['volume']:,.0f}{flag}"
+            )
+    _poly_summary = "\n".join(_poly_lines) or "No markets"
+else:
+    _poly_summary = "No markets available"
+
+_rv   = d.get("rv") or {}
+_fg   = d.get("fear_greed") or {}
+_vol1 = (d.get("vol") or {}).get("1m") or {}
+_vol6 = (d.get("vol") or {}).get("6m") or {}
+_fund = d.get("funding") or {}
+_etff = d.get("etf_flows") or {}
+
+with st.spinner("Running AI analysis…"):
+    analysis = load_ai_analysis(
+        spot            = spot,
+        change_pct      = (d.get("stats24") or {}).get("change_pct"),
+        ema20           = emas.get(20),
+        ema50           = emas.get(50),
+        ema200          = emas.get(200),
+        atr             = atr,
+        vol1m_hl_pct    = _vol1.get("avg_hl_pct"),
+        vol6m_hl_pct    = _vol6.get("avg_hl_pct"),
+        dvol            = d.get("dvol"),
+        daily_move_pct  = d["dvol"] / (365 ** 0.5) if d.get("dvol") else None,
+        rv7             = _rv.get("rv7"),
+        rv30            = _rv.get("rv30"),
+        fg_val          = _fg.get("value"),
+        fg_label        = _fg.get("classification", ""),
+        funding_rate    = _fund.get("rate_pct"),
+        etf_flow_today  = _etff.get("today"),
+        ff_count        = len(d.get("ff") or []),
+        poly_summary    = _poly_summary,
+    )
+
+st.markdown(
+    f"<div class='card' style='padding:16px 20px;line-height:1.8;font-size:0.88rem'>"
+    f"{analysis.replace(chr(10), '<br>')}"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
+
+# ── Row 4: Polymarket Markets ─────────────────────────────────────────────────
+st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
     f"<div class='sec-hdr'>"
     f"Polymarket · BTC Markets — resolves {market_date.strftime('%d %b %Y')} &nbsp;·&nbsp; "
@@ -522,8 +711,6 @@ st.markdown(
     f"</div>",
     unsafe_allow_html=True,
 )
-
-poly_list, found_date = d["poly"]
 
 if found_date and found_date != market_date:
     st.markdown(
@@ -537,37 +724,31 @@ if found_date and found_date != market_date:
 if poly_list and spot:
     rows = []
     for m in poly_list:
-        strike = m["strike"]
+        strike   = m["strike"]
         diff_usd = (spot - strike) if strike else None
         diff_pct = (diff_usd / strike * 100) if strike else None
-        yes_p = m["yes_price"]
-        no_p  = m["no_price"]
-
-        direction = "—"
-        if diff_usd is not None:
-            direction = "▲ ITM" if diff_usd > 0 else "▼ OTM"
-
+        yes_p    = m["yes_price"]
+        no_p     = m["no_price"]
+        direction = "▲ ITM" if diff_usd and diff_usd > 0 else "▼ OTM"
         rows.append({
-            "Strike ($)":    f"${strike:,.0f}"          if strike           else "—",
-            "Spot − Strike": f"${diff_usd:+,.0f}"       if diff_usd is not None else "—",
-            "Diff %":        f"{diff_pct:+.2f}%"         if diff_pct is not None else "—",
+            "Strike ($)":    f"${strike:,.0f}"       if strike           else "—",
+            "Spot − Strike": f"${diff_usd:+,.0f}"    if diff_usd is not None else "—",
+            "Diff %":        f"{diff_pct:+.2f}%"      if diff_pct is not None else "—",
             "Position":      direction,
-            "YES (¢)":       f"{yes_p*100:.1f}¢"         if yes_p is not None else "—",
-            "NO (¢)":        f"{no_p*100:.1f}¢"          if no_p  is not None else "—",
+            "YES (¢)":       f"{yes_p*100:.1f}¢"      if yes_p is not None else "—",
+            "NO (¢)":        f"{no_p*100:.1f}¢"       if no_p  is not None else "—",
             "Volume ($)":    f"${m['volume']:,.0f}",
             "Question":      m["question"],
         })
-
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True, height=400)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=400)
 
 elif poly_list:
     st.info("Spot price unavailable — showing raw Polymarket data.")
     rows = [
         {
-            "Strike ($)": f"${m['strike']:,.0f}" if m["strike"] else "—",
-            "YES (¢)":    f"{m['yes_price']*100:.1f}¢" if m["yes_price"] else "—",
-            "NO (¢)":     f"{m['no_price']*100:.1f}¢"  if m["no_price"]  else "—",
+            "Strike ($)": f"${m['strike']:,.0f}"         if m["strike"]    else "—",
+            "YES (¢)":    f"{m['yes_price']*100:.1f}¢"  if m["yes_price"] else "—",
+            "NO (¢)":     f"{m['no_price']*100:.1f}¢"   if m["no_price"]  else "—",
             "Volume ($)": f"${m['volume']:,.0f}",
             "Question":   m["question"],
         }
@@ -585,8 +766,8 @@ else:
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
     f"<span class='muted' style='font-size:0.72rem'>"
-    f"Data sources: Binance · Kraken · Bybit/OKX · Deribit · Alternative.me · Farside · ForexFactory · CryptoCompare · Polymarket Gamma API · "
-    f"Local OHLC CSVs &nbsp;|&nbsp; Cache TTL: 60s &nbsp;|&nbsp; "
+    f"Data sources: Binance · Kraken · Bybit/OKX · Deribit · Alternative.me · CMC · ForexFactory · CryptoCompare · Polymarket Gamma API"
+    f"&nbsp;|&nbsp; AI: Gemini 2.0 Flash &nbsp;|&nbsp; Cache TTL: 60s &nbsp;|&nbsp; "
     f"Last loaded: {now_utc.strftime('%H:%M:%S')} UTC"
     f"</span>",
     unsafe_allow_html=True,
