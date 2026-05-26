@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fetchers
@@ -30,64 +31,78 @@ st.set_page_config(
 # ── Theme CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
+  :root {
+    --bg:     #060A0F;
+    --card:   #0A1018;
+    --border: #141E2A;
+    --green:  #00D4A8;
+    --red:    #FF3D54;
+    --amber:  #E8B000;
+    --blue:   #4E9FD4;
+    --muted:  #3D5066;
+    --text:   #A8BDD0;
+    --bright: #CDE0F0;
+  }
+
   /* Global */
-  .stApp { background: #0d1117; color: #e6edf3; font-family: 'SF Mono', 'Fira Code', monospace; }
-  .block-container { padding: 1rem 2rem 2rem; }
+  .stApp { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
+  .block-container { padding: 0.6rem 2rem 2rem; max-width: 100% !important; }
 
   /* Metric overrides */
-  [data-testid="stMetricValue"] { font-size: 1.5rem !important; font-weight: 700; letter-spacing: -0.02em; }
-  [data-testid="stMetricLabel"] { color: #7d8590 !important; font-size: 0.7rem !important; text-transform: uppercase; letter-spacing: 0.06em; }
-  [data-testid="stMetricDelta"] { font-size: 0.85rem !important; }
+  [data-testid="stMetricValue"] { font-size: 1.3rem !important; font-weight: 700; color: var(--bright) !important; letter-spacing: -0.02em; }
+  [data-testid="stMetricLabel"] { color: var(--muted) !important; font-size: 0.6rem !important; text-transform: uppercase; letter-spacing: 0.14em; }
+  [data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
 
   /* Section header */
   .sec-hdr {
-    color: #7d8590;
-    font-size: 0.65rem;
+    color: var(--muted);
+    font-size: 0.57rem;
     font-weight: 700;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
-    border-bottom: 1px solid #21262d;
-    padding-bottom: 5px;
-    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+    margin-bottom: 8px;
     margin-top: 4px;
   }
 
   /* Card */
   .card {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 6px;
-    padding: 10px 14px;
-    margin-bottom: 8px;
-    font-size: 0.85rem;
-    line-height: 1.5;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 1px;
+    padding: 6px 10px;
+    margin-bottom: 5px;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: var(--text);
   }
 
   /* Signal dot */
-  .dot-green { color: #3fb950; font-size: 0.65rem; }
-  .dot-red   { color: #f85149; font-size: 0.65rem; }
-  .dot-yel   { color: #d29922; font-size: 0.65rem; }
+  .dot-green { color: var(--green); font-size: 0.6rem; }
+  .dot-red   { color: var(--red);   font-size: 0.6rem; }
+  .dot-yel   { color: var(--amber); font-size: 0.6rem; }
 
   /* Color helpers */
-  .green  { color: #3fb950; }
-  .red    { color: #f85149; }
-  .yellow { color: #d29922; }
-  .muted  { color: #7d8590; }
-  .blue   { color: #58a6ff; }
+  .green  { color: var(--green); }
+  .red    { color: var(--red); }
+  .yellow { color: var(--amber); }
+  .muted  { color: var(--muted); }
+  .blue   { color: var(--blue); }
 
   /* News */
   .news-card {
-    border-left: 2px solid #21262d;
-    padding: 6px 12px;
-    margin: 5px 0;
-    font-size: 0.82rem;
-    line-height: 1.45;
+    border-left: 2px solid var(--border);
+    padding: 5px 10px;
+    margin: 4px 0;
+    font-size: 0.75rem;
+    line-height: 1.4;
   }
-  .news-card.high { border-left-color: #f85149; }
-  .news-card.info { border-left-color: #388bfd; }
+  .news-card.high { border-left-color: var(--red); }
+  .news-card.info { border-left-color: var(--blue); }
 
   /* Divider */
-  hr { border-color: #21262d !important; margin: 10px 0; }
+  hr { border-color: var(--border) !important; margin: 8px 0; }
 
   /* Hide streamlit chrome */
   #MainMenu { visibility: hidden; }
@@ -95,7 +110,45 @@ st.markdown("""
   header     { visibility: hidden; }
 
   /* Dataframe */
-  [data-testid="stDataFrame"] { border: 1px solid #21262d; border-radius: 6px; }
+  [data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 1px; }
+
+  /* Terminal header */
+  .term-header {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--green);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    line-height: 1;
+  }
+  .term-prompt { color: var(--muted); margin-right: 6px; }
+  .term-cursor {
+    display: inline-block;
+    width: 6px;
+    height: 0.85em;
+    background: var(--green);
+    vertical-align: text-bottom;
+    margin-left: 3px;
+    animation: blink 1.1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* Buttons */
+  .stButton > button {
+    background: var(--card) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--muted) !important;
+    font-family: 'SF Mono', 'Fira Code', monospace !important;
+    font-size: 0.7rem !important;
+    letter-spacing: 0.1em !important;
+    border-radius: 1px !important;
+    padding: 4px 14px !important;
+    text-transform: uppercase !important;
+  }
+  .stButton > button:hover {
+    border-color: var(--green) !important;
+    color: var(--green) !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -106,7 +159,14 @@ now_ist = datetime.now(IST)
 
 hc1, hc2, hc3 = st.columns([4, 2, 1])
 with hc1:
-    st.markdown("## ₿ BTC Trade Dashboard")
+    st.markdown(
+        "<div class='term-header'>"
+        "<span class='term-prompt'>▶</span>"
+        "BTC Bonding Dashboard"
+        "<span class='term-cursor'></span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 with hc2:
     st.markdown(
         f"<span class='muted' style='font-size:0.8rem'>"
@@ -217,6 +277,62 @@ with ss3:
 with ss4:
     st.metric("Time Remaining", countdown_str)
 
+st.markdown("<hr>", unsafe_allow_html=True)
+
+# ── Intraday chart — TradingView ──────────────────────────────────────────────
+st.markdown("<div class='sec-hdr'>Intraday Price Action · BINANCE:BTCUSDT · 1H</div>", unsafe_allow_html=True)
+components.html("""
+<!DOCTYPE html>
+<html>
+<head><style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #060A0F; overflow: hidden; }
+  #tv_btc { width: 100%; height: 100%; }
+</style></head>
+<body>
+  <div id="tv_btc"></div>
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <script>
+  new TradingView.widget({
+    "container_id":        "tv_btc",
+    "width":               "100%",
+    "height":              "100%",
+    "symbol":              "BINANCE:BTCUSDT",
+    "interval":            "60",
+    "timezone":            "Asia/Kolkata",
+    "theme":               "dark",
+    "style":               "1",
+    "locale":              "en",
+    "backgroundColor":     "#060A0F",
+    "gridColor":           "rgba(15,26,40,0.9)",
+    "toolbar_bg":          "#0A1018",
+    "withdateranges":      true,
+    "range":               "1D",
+    "hide_side_toolbar":   true,
+    "allow_symbol_change": false,
+    "hide_volume":         false,
+    "save_image":          false,
+    "enable_publishing":   false,
+    "studies":             [],
+    "overrides": {
+      "paneProperties.background":            "#060A0F",
+      "paneProperties.backgroundType":        "solid",
+      "paneProperties.vertGridProperties.color": "rgba(15,26,40,0.8)",
+      "paneProperties.horzGridProperties.color": "rgba(15,26,40,0.8)",
+      "scalesProperties.textColor":           "#3D5066",
+      "scalesProperties.backgroundColor":    "#060A0F",
+      "candleStyle.upColor":                  "#00D4A8",
+      "candleStyle.downColor":                "#FF3D54",
+      "candleStyle.borderUpColor":            "#00D4A8",
+      "candleStyle.borderDownColor":          "#FF3D54",
+      "candleStyle.wickUpColor":              "#00D4A8",
+      "candleStyle.wickDownColor":            "#FF3D54"
+    }
+  });
+  </script>
+</body>
+</html>
+""", height=460)
 st.markdown("<hr>", unsafe_allow_html=True)
 
 # ── Row 1: Key price metrics ──────────────────────────────────────────────────
@@ -335,8 +451,8 @@ with col_verdict:
 
     if ff_error:
         st.markdown(
-            "<div class='news-card high'><span class='yellow'>⚠ ForexFactory rate-limited. "
-            "Data will auto-retry in ~5 min.</span></div>",
+            "<div class='news-card high'><span class='yellow'>⚠ FOREX FACTORY RATE-LIMITED — "
+            "auto-retry in ~5 min</span></div>",
             unsafe_allow_html=True,
         )
     elif ff:
@@ -357,7 +473,7 @@ with col_verdict:
             )
     else:
         st.markdown(
-            "<div class='news-card info'><span class='muted'>No high-impact macro events today.</span></div>",
+            "<div class='news-card info'><span class='muted'>NO HIGH-IMPACT MACRO EVENTS TODAY</span></div>",
             unsafe_allow_html=True,
         )
 
@@ -410,7 +526,7 @@ with col_verdict:
             st.markdown(
                 f"<div class='news-card info'>"
                 f"<a href='{item['url']}' target='_blank' "
-                f"style='color:#58a6ff;text-decoration:none;font-weight:600'>{item['title']}</a>"
+                f"style='color:#4E9FD4;text-decoration:none;font-weight:600'>{item['title']}</a>"
                 f"<br><span class='muted'>{item['source']} · {pub} UTC</span>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -442,7 +558,7 @@ with col_vol:
             f"<div class='card'>"
             f"<span class='muted'>Fear & Greed</span>&nbsp;&nbsp;"
             f"<span class='{fg_color}'><b>{val} — {label}</b></span><br>"
-            f"<span style='letter-spacing:2px;font-size:0.8rem;color:#7d8590'>{bar}</span>"
+            f"<span style='letter-spacing:2px;font-size:0.8rem;color:#3D5066'>{bar}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -695,7 +811,7 @@ with st.spinner("Running AI analysis…"):
     )
 
 st.markdown(
-    f"<div class='card' style='padding:16px 20px;line-height:1.8;font-size:0.88rem'>"
+    f"<div class='card' style='padding:14px 18px;line-height:1.9;font-size:0.8rem;border-left:2px solid #00D4A8'>"
     f"{analysis.replace(chr(10), '<br>')}"
     f"</div>",
     unsafe_allow_html=True,
@@ -714,33 +830,54 @@ st.markdown(
 
 if found_date and found_date != market_date:
     st.markdown(
-        f"<div class='news-card' style='border-left-color:#d29922;margin-bottom:8px'>"
-        f"<span class='yellow'>⚠ {market_date.strftime('%d %b')} markets not yet listed — "
-        f"showing {found_date.strftime('%d %b %Y')} instead.</span>"
+        f"<div class='news-card' style='border-left-color:#E8B000;margin-bottom:8px'>"
+        f"<span class='yellow'>⚠ {market_date.strftime('%d %b').upper()} MARKETS NOT YET LISTED — "
+        f"SHOWING {found_date.strftime('%d %b %Y').upper()} INSTEAD</span>"
         f"</div>",
         unsafe_allow_html=True,
     )
 
 if poly_list and spot:
-    rows = []
+    rows       = []
+    bond_types = []
     for m in poly_list:
         strike   = m["strike"]
         diff_usd = (spot - strike) if strike else None
         diff_pct = (diff_usd / strike * 100) if strike else None
         yes_p    = m["yes_price"]
         no_p     = m["no_price"]
+        yes_c    = yes_p * 100 if yes_p is not None else 0.0
+        no_c     = no_p  * 100 if no_p  is not None else 0.0
         direction = "▲ ITM" if diff_usd and diff_usd > 0 else "▼ OTM"
+        if 99 < yes_c < 99.9:
+            bond_types.append("yes")
+        elif 99 < no_c < 99.9:
+            bond_types.append("no")
+        else:
+            bond_types.append("")
         rows.append({
-            "Strike ($)":    f"${strike:,.0f}"       if strike           else "—",
-            "Spot − Strike": f"${diff_usd:+,.0f}"    if diff_usd is not None else "—",
-            "Diff %":        f"{diff_pct:+.2f}%"      if diff_pct is not None else "—",
+            "Strike ($)":    f"${strike:,.0f}"        if strike           else "—",
+            "Spot − Strike": f"${diff_usd:+,.0f}"     if diff_usd is not None else "—",
+            "Diff %":        f"{diff_pct:+.2f}%"       if diff_pct is not None else "—",
             "Position":      direction,
-            "YES (¢)":       f"{yes_p*100:.1f}¢"      if yes_p is not None else "—",
-            "NO (¢)":        f"{no_p*100:.1f}¢"       if no_p  is not None else "—",
+            "YES (¢)":       f"{yes_c:.1f}¢"           if yes_p is not None else "—",
+            "NO (¢)":        f"{no_c:.1f}¢"            if no_p  is not None else "—",
             "Volume ($)":    f"${m['volume']:,.0f}",
             "Question":      m["question"],
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=400)
+
+    df = pd.DataFrame(rows)
+
+    def _style_bonds(row):
+        bt = bond_types[row.name] if row.name < len(bond_types) else ""
+        if bt == "yes":
+            return ["background-color: #062018; color: #00D4A8; font-weight: 700"] * len(row)
+        if bt == "no":
+            return ["background-color: #061428; color: #4E9FD4; font-weight: 700"] * len(row)
+        return [""] * len(row)
+
+    styled = df.style.apply(_style_bonds, axis=1)
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=400)
 
 elif poly_list:
     st.info("Spot price unavailable — showing raw Polymarket data.")
