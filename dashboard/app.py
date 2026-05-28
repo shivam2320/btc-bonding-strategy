@@ -477,47 +477,6 @@ with col_verdict:
             unsafe_allow_html=True,
         )
 
-    st.markdown("<br><div class='sec-hdr'>Signal Summary</div>", unsafe_allow_html=True)
-
-    signals: list[tuple[str, str, str]] = []
-    if spot and emas:
-        ema20  = emas.get(20,  0)
-        ema50  = emas.get(50,  0)
-        ema200 = emas.get(200, 0)
-        signals.append(("Above EMA 20",  "green" if spot > ema20  else "red",  "Bullish short-term" if spot > ema20  else "Bearish short-term"))
-        signals.append(("Above EMA 50",  "green" if spot > ema50  else "red",  "Bullish mid-term"   if spot > ema50  else "Bearish mid-term"))
-        signals.append(("Above EMA 200", "green" if spot > ema200 else "red",  "Bull market"        if spot > ema200 else "Bear market"))
-
-    if funding:
-        rate = funding.get("rate_pct", 0)
-        if abs(rate) > 0.05:
-            color = "red" if rate > 0 else "green"
-            label = "High longs (caution)" if rate > 0 else "High shorts (squeeze risk)"
-            signals.append(("Funding Extreme", color, label))
-        else:
-            signals.append(("Funding Neutral", "yellow", "Balanced positioning"))
-
-    if ff:
-        signals.append(("⚠ High Impact News", "yellow", f"{len(ff)} event(s) — expect volatility"))
-
-    if vol_1m:
-        avg_hl = vol_1m["avg_hl_pct"]
-        if avg_hl > 3:
-            signals.append(("High Volatility", "yellow", f"Avg H-L {avg_hl:.2f}% — wide moves expected"))
-        else:
-            signals.append(("Normal Volatility", "green", f"Avg H-L {avg_hl:.2f}%"))
-
-    for label, color, note in signals:
-        dot_class = f"dot-{color}"
-        st.markdown(
-            f"<div class='card' style='padding:8px 14px'>"
-            f"<span class='{dot_class}'>●</span>&nbsp;"
-            f"<b>{label}</b>"
-            f"<br><span class='muted' style='font-size:0.75rem;padding-left:14px'>{note}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
     st.markdown("<br><div class='sec-hdr'>BTC News</div>", unsafe_allow_html=True)
     news = d["news"]
     if news:
@@ -683,6 +642,7 @@ def load_ai_analysis(
     funding_rate,
     etf_flow_today,
     ff_count,
+    news_headlines,
     poly_summary,
 ) -> str:
     api_key = st.secrets.get("OPENROUTER_API_KEY", "")
@@ -704,6 +664,9 @@ Funding rate: {_fmt(funding_rate, "+.4f", suffix="%")}
 ETF net flow today: {_fmt(etf_flow_today, "+,.1f", "$", "M")}
 High-impact macro events today: {ff_count}
 
+BTC NEWS HEADLINES (latest):
+{news_headlines}
+
 POLYMARKET BTC MARKETS (today's session)
 {poly_summary}"""
 
@@ -723,10 +686,10 @@ CUSHION ANALYSIS: Safety ratio = (spot − strike) ÷ expected daily move
 Respond in EXACTLY this format (2–3 sentences each, specific numbers required):
 
 **TRADE DECISION**: [TRADE / SKIP / CAUTION]
-[Driven by today's news and volatility only. Cite: macro events count, DVOL level, vol regime (expanding/contracting), ETF flows, Fear & Greed. TRADE = calm environment; CAUTION = one risk factor; SKIP = multiple risks stacking up or no valid bond exists.]
+[Lead with the news headlines — do any suggest imminent shock (regulation, macro event, whale move, exchange issue)? Then assess: DVOL level, vol regime (expanding/contracting), ETF flows, Fear & Greed, macro event count. TRADE = calm news + calm vol; CAUTION = one risk factor; SKIP = news risk OR multiple vol risks stacking up OR no valid bond exists.]
 
 **TREND**:
-[BTC price action and momentum. Where is spot relative to EMA20/50/200? Is the move today continuation or reversal? What does the 24h change and funding rate suggest about near-term direction? This informs which side (YES or NO bond) has more tailwind.]
+[Start with what the news headlines say about current market narrative — bullish catalyst, bearish pressure, or neutral? Then: where is spot vs EMA20/50/200? Is today's 24h move a continuation or reversal? What does funding rate suggest? Conclude which side (YES or NO bond) has more tailwind given both price structure and news.]
 
 **RISK ASSESSMENT**:
 [What specific events or conditions could cause BTC to breach the target strike during this session? Quantify: how many expected daily moves would need to occur? Reference ATR, historical max H-L, and any macro catalysts. This is about TAIL RISK, not trend.]
@@ -788,6 +751,11 @@ _vol6 = (d.get("vol") or {}).get("6m") or {}
 _fund = d.get("funding") or {}
 _etff = d.get("etf_flows") or {}
 
+_news = d.get("news") or []
+_news_summary = "\n".join(
+    f"• {item['title']} ({item['source']})" for item in _news[:8]
+) or "No headlines available"
+
 with st.spinner("Running AI analysis…"):
     analysis = load_ai_analysis(
         spot            = spot,
@@ -807,6 +775,7 @@ with st.spinner("Running AI analysis…"):
         funding_rate    = _fund.get("rate_pct"),
         etf_flow_today  = _etff.get("today"),
         ff_count        = len(d.get("ff") or []),
+        news_headlines  = _news_summary,
         poly_summary    = _poly_summary,
     )
 

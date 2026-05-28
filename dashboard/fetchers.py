@@ -19,11 +19,12 @@ import requests
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "backtest"))
 
-BINANCE   = "https://api.binance.com"
-COINGECKO = "https://api.coingecko.com/api/v3"
-KRAKEN    = "https://api.kraken.com/0/public"
-BYBIT     = "https://api.bybit.com/v5"
-GAMMA_API = "https://gamma-api.polymarket.com"
+BINANCE      = "https://api.binance.com"
+COINGECKO    = "https://api.coingecko.com/api/v3"
+KRAKEN       = "https://api.kraken.com/0/public"
+BYBIT        = "https://api.bybit.com/v5"
+GAMMA_API    = "https://gamma-api.polymarket.com"
+NEWSAPI_KEY  = "83994ea8-14b0-404e-9f0f-282a2d0b7c9d"
 
 _SESS = requests.Session()
 _SESS.headers.update({"User-Agent": "Mozilla/5.0"})
@@ -238,24 +239,43 @@ def get_forex_factory_events(today: date | None = None) -> list[dict]:
     return events
 
 
-# ── Crypto News ───────────────────────────────────────────────────────────────
+# ── Crypto News (newsapi.ai) ──────────────────────────────────────────────────
 
 def get_crypto_news() -> list[dict]:
     data = _get(
-        "https://min-api.cryptocompare.com/data/v2/news/",
-        {"lang": "EN", "categories": "BTC,Trading", "sortOrder": "latest"},
-    )
-    if not data or not data.get("Data"):
-        return []
-    return [
+        "https://newsapi.ai/api/v1/article/getArticles",
         {
-            "title": item.get("title", ""),
-            "source": item.get("source_info", {}).get("name", ""),
-            "url": item.get("url", ""),
-            "published_on": datetime.fromtimestamp(item.get("published_on", 0), tz=timezone.utc),
-        }
-        for item in data["Data"][:8]
-    ]
+            "keyword":           "Bitcoin",
+            "keywordLoc":        "title,body",
+            "lang":              "eng",
+            "sortBy":            "date",
+            "sortByAsc":         "false",
+            "articlesPage":      1,
+            "articlesCount":     8,
+            "articlesSortBy":    "date",
+            "articlesSortByAsc": "false",
+            "resultType":        "articles",
+            "apiKey":            NEWSAPI_KEY,
+        },
+        timeout=12,
+    )
+    if not data or "articles" not in data:
+        return []
+    results = data.get("articles", {}).get("results", [])
+    items = []
+    for item in results[:8]:
+        try:
+            dt_str = item.get("dateTimePub") or item.get("dateTime", "")
+            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except Exception:
+            dt = datetime.now(timezone.utc)
+        items.append({
+            "title":        item.get("title", ""),
+            "source":       (item.get("source") or {}).get("title", ""),
+            "url":          item.get("url", ""),
+            "published_on": dt,
+        })
+    return items
 
 
 # ── Futures / Trend  (Bybit → OKX fallback) ──────────────────────────────────
