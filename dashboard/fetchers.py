@@ -534,41 +534,52 @@ def get_gex_for_strikes(strikes: list, expiry_date: "date", spot: float) -> dict
     Calls ticker once per option (call + put) for each strike.
     Returns {strike: {"call_gex_m", "put_gex_m", "net_gex_m"}} — all in $M.
     """
-    day_str = str(expiry_date.day)               # Deribit: non-zero-padded day
-    mon_str = expiry_date.strftime("%b").upper()  # "JUN"
-    yr_str  = expiry_date.strftime("%y")          # "26"
-    scale   = spot * spot / 1e6                   # gamma × OI × spot² → $M
+    try:
+        day_str = str(expiry_date.day)               # Deribit: non-zero-padded day
+        mon_str = expiry_date.strftime("%b").upper()  # "JUN"
+        yr_str  = expiry_date.strftime("%y")          # "26"
+        scale   = (spot * spot / 1e6) if spot else 0.0
 
-    per_strike: dict = {}
-    for raw_strike in strikes:
-        strike_int = int(round(float(raw_strike)))
-        call_g = call_oi = put_g = put_oi = 0.0
-
-        for opt_type in ("C", "P"):
-            name = f"BTC-{day_str}{mon_str}{yr_str}-{strike_int}-{opt_type}"
-            data = _get(
-                "https://www.deribit.com/api/v2/public/ticker",
-                {"instrument_name": name},
-                timeout=8,
-            )
+        per_strike: dict = {}
+        for raw_strike in strikes:
             try:
-                r  = data["result"]
-                g  = float((r.get("greeks") or {}).get("gamma") or 0)
-                oi = float(r.get("open_interest") or 0)
-                if opt_type == "C":
-                    call_g, call_oi = g, oi
-                else:
-                    put_g,  put_oi  = g, oi
+                strike_int = int(round(float(raw_strike)))
             except Exception:
-                pass
+                continue
+            call_g = call_oi = put_g = put_oi = 0.0
 
-        per_strike[float(raw_strike)] = {
-            "call_gex_m": call_g * call_oi * scale,
-            "put_gex_m":  put_g  * put_oi  * scale,
-            "net_gex_m":  (call_g * call_oi - put_g * put_oi) * scale,
-        }
+            for opt_type in ("C", "P"):
+                name = f"BTC-{day_str}{mon_str}{yr_str}-{strike_int}-{opt_type}"
+                try:
+                    data = _get(
+                        "https://www.deribit.com/api/v2/public/ticker",
+                        {"instrument_name": name},
+                        timeout=8,
+                    )
+                    if not data or not isinstance(data, dict):
+                        continue
+                    r = data.get("result")
+                    if not isinstance(r, dict):
+                        continue
+                    greeks = r.get("greeks")
+                    g  = float((greeks.get("gamma") if isinstance(greeks, dict) else None) or 0)
+                    oi = float(r.get("open_interest") or 0)
+                    if opt_type == "C":
+                        call_g, call_oi = g, oi
+                    else:
+                        put_g, put_oi = g, oi
+                except Exception:
+                    pass
 
-    return per_strike
+            per_strike[float(raw_strike)] = {
+                "call_gex_m": call_g * call_oi * scale,
+                "put_gex_m":  put_g  * put_oi  * scale,
+                "net_gex_m":  (call_g * call_oi - put_g * put_oi) * scale,
+            }
+
+        return per_strike
+    except Exception:
+        return {}
 
 
 # ── Polymarket ────────────────────────────────────────────────────────────────

@@ -270,7 +270,10 @@ session_open = d.get("session_open")
 poly_list, found_date = d["poly"]
 _poly_strikes_tuple = tuple(sorted(int(m["strike"]) for m in poly_list if m.get("strike")))
 _spot_k = int(round((spot or 0) / 1000))
-_strike_gex: dict = load_strike_gex(_poly_strikes_tuple, market_date.isoformat(), _spot_k) if (_poly_strikes_tuple and spot) else {}
+try:
+    _strike_gex: dict = load_strike_gex(_poly_strikes_tuple, market_date.isoformat(), _spot_k) if (_poly_strikes_tuple and spot) else {}
+except Exception:
+    _strike_gex = {}
 
 # ── Session strip ─────────────────────────────────────────────────────────────
 remaining     = session_end - now_ist
