@@ -6,6 +6,7 @@ Run:
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -233,6 +234,7 @@ def load_slow_data() -> dict:
         "etf_flows":  fetchers.get_etf_flows(),
         "fear_greed": fetchers.get_fear_greed(),
         "dvol":       fetchers.get_deribit_dvol(),
+        "gex":        fetchers.get_btc_gex(),
     }
 
 
@@ -565,7 +567,33 @@ with col_vol:
             unsafe_allow_html=True,
         )
 
-    if not fg and not rv and not dvol:
+    # ── GEX ───────────────────────────────────────────────────────────────────
+    gex = d.get("gex")
+    if gex:
+        net_m   = gex["net_gex_bn"]  * 1000   # $B → $M for readable display
+        calls_m = gex["call_gex_bn"] * 1000
+        puts_m  = gex["put_gex_bn"]  * 1000
+        flip    = gex["flip_level"]
+        if gex["regime"] == "positive":
+            gex_color, gex_label, gex_note = "green", "Positive Gamma", "Stabilising · range-bound moves expected"
+        else:
+            gex_color, gex_label, gex_note = "red",   "Negative Gamma", "Destabilising · trending/volatile moves expected"
+        flip_str = f"&nbsp;·&nbsp; Flip ~<b>${flip:,.0f}</b>" if flip else ""
+        st.markdown(
+            f"<div class='card'>"
+            f"<span class='muted'>Net GEX (Deribit · BS approx)</span>"
+            f"&nbsp;&nbsp;<b>${net_m:+,.0f}M</b>"
+            f"&nbsp;&nbsp;<span class='{gex_color}'>{gex_label}</span><br>"
+            f"<span class='muted' style='font-size:0.75rem'>{gex_note}</span><br>"
+            f"<span class='muted' style='font-size:0.75rem'>"
+            f"Calls <span class='green'>${calls_m:,.0f}M</span>"
+            f"&nbsp;&nbsp;Puts <span class='red'>${puts_m:,.0f}M</span>"
+            f"{flip_str}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    if not fg and not rv and not dvol and not gex:
         st.markdown("<div class='card muted'>Live signals unavailable</div>", unsafe_allow_html=True)
 
     st.markdown("<br><div class='sec-hdr'>Historical Volatility</div>", unsafe_allow_html=True)
@@ -616,6 +644,124 @@ with col_vol:
 
 
 
+# ── GEX by Strike chart ───────────────────────────────────────────────────────
+st.markdown("<hr>", unsafe_allow_html=True)
+st.markdown("<div class='sec-hdr'>GEX Profile by Strike · All Expirations</div>", unsafe_allow_html=True)
+
+_gex_all    = (d.get("gex") or {}).get("gex_by_strike") or {}
+_poly_strikes = sorted(m["strike"] for m in (d["poly"][0] or []) if m.get("strike"))
+_deribit_keys = sorted(_gex_all.keys())
+
+# Map each Polymarket strike to the nearest Deribit strike (within $1 000 tolerance)
+_gex_chart: dict[float, float] = {}
+for ps in _poly_strikes:
+    if _deribit_keys:
+        closest = min(_deribit_keys, key=lambda s: abs(s - ps))
+        _gex_chart[ps] = _gex_all[closest] if abs(closest - ps) < 1000 else 0.0
+
+if _gex_chart and spot:
+    _strikes  = sorted(_gex_chart.keys())
+    _labels   = json.dumps([f"${int(s):,}" for s in _strikes])
+    _values   = json.dumps([round(_gex_chart[s], 2) for s in _strikes])
+    _colors   = json.dumps(["rgba(0,212,168,0.75)" if _gex_chart[s] >= 0
+                             else "rgba(255,61,84,0.75)" for s in _strikes])
+    _borders  = json.dumps(["#00D4A8" if _gex_chart[s] >= 0
+                             else "#FF3D54" for s in _strikes])
+    # Index of strike closest to spot (for annotation)
+    _spot_idx = int(min(range(len(_strikes)), key=lambda i: abs(_strikes[i] - spot)))
+    _spot_lbl = f"Spot ${spot:,.0f}"
+
+    components.html(f"""<!DOCTYPE html>
+<html><head><style>
+  *{{margin:0;padding:0;box-sizing:border-box}}
+  html,body{{background:#060A0F;width:100%;height:100%;overflow:hidden}}
+  canvas{{display:block}}
+</style></head>
+<body>
+<canvas id="gex"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<script>
+new Chart(document.getElementById('gex'), {{
+  type: 'bar',
+  data: {{
+    labels: {_labels},
+    datasets: [{{
+      data: {_values},
+      backgroundColor: {_colors},
+      borderColor: {_borders},
+      borderWidth: 1,
+      barPercentage: 0.85,
+      categoryPercentage: 1.0,
+    }}]
+  }},
+  options: {{
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {{
+      legend: {{display: false}},
+      tooltip: {{
+        backgroundColor: '#0A1018',
+        borderColor: '#141E2A',
+        borderWidth: 1,
+        titleColor: '#A8BDD0',
+        bodyColor: '#A8BDD0',
+        titleFont: {{family:'SF Mono,Fira Code,monospace',size:10}},
+        bodyFont:  {{family:'SF Mono,Fira Code,monospace',size:10}},
+        callbacks: {{
+          label: ctx => ' ' + ctx.parsed.y.toFixed(1) + 'M GEX'
+        }}
+      }},
+      annotation: {{
+        annotations: {{
+          spotLine: {{
+            type: 'line',
+            xMin: {_spot_idx},
+            xMax: {_spot_idx},
+            borderColor: '#E8B000',
+            borderWidth: 1.5,
+            borderDash: [4,4],
+            label: {{
+              display: true,
+              content: '{_spot_lbl}',
+              position: 'start',
+              color: '#E8B000',
+              backgroundColor: 'transparent',
+              font: {{family:'SF Mono,Fira Code,monospace', size:9}},
+              padding: 2,
+            }}
+          }}
+        }}
+      }}
+    }},
+    scales: {{
+      x: {{
+        ticks: {{
+          color: '#3D5066',
+          font: {{family:'SF Mono,Fira Code,monospace',size:8}},
+          maxRotation: 45,
+          autoSkip: true,
+          maxTicksLimit: 20,
+        }},
+        grid: {{color:'rgba(15,26,40,0.8)'}},
+      }},
+      y: {{
+        ticks: {{
+          color: '#3D5066',
+          font: {{family:'SF Mono,Fira Code,monospace',size:9}},
+          callback: v => '$' + v.toFixed(0) + 'M'
+        }},
+        grid: {{color:'rgba(15,26,40,0.8)'}},
+      }}
+    }}
+  }}
+}});
+</script>
+</body></html>""", height=300)
+else:
+    st.markdown("<div class='card muted'>GEX by strike unavailable</div>", unsafe_allow_html=True)
+
 # Unpack poly data — market_date/session_start/session_end already computed above
 poly_list, found_date = d["poly"]
 
@@ -642,6 +788,9 @@ def load_ai_analysis(
     funding_rate,
     etf_flow_today,
     ff_count,
+    gex_net_bn,
+    gex_regime,
+    gex_flip,
     news_headlines,
     poly_summary,
 ) -> str:
@@ -663,6 +812,7 @@ Fear & Greed: {fg_val if fg_val is not None else "N/A"} — {fg_label}
 Funding rate: {_fmt(funding_rate, "+.4f", suffix="%")}
 ETF net flow today: {_fmt(etf_flow_today, "+,.1f", "$", "M")}
 High-impact macro events today: {ff_count}
+Net GEX: {f"${gex_net_bn * 1000:+,.0f}M ({gex_regime.upper()} GAMMA)" if gex_net_bn is not None else "N/A"}{f"  |  Gamma flip: ~${gex_flip:,.0f}" if gex_flip else ""}
 
 BTC NEWS HEADLINES (latest):
 {news_headlines}
@@ -692,7 +842,7 @@ Respond in EXACTLY this format (2–3 sentences each, specific numbers required)
 [Start with what the news headlines say about current market narrative — bullish catalyst, bearish pressure, or neutral? Then: where is spot vs EMA20/50/200? Is today's 24h move a continuation or reversal? What does funding rate suggest? Conclude which side (YES or NO bond) has more tailwind given both price structure and news.]
 
 **RISK ASSESSMENT**:
-[What specific events or conditions could cause BTC to breach the target strike during this session? Quantify: how many expected daily moves would need to occur? Reference ATR, historical max H-L, and any macro catalysts. This is about TAIL RISK, not trend.]
+[Lead with GEX regime: positive gamma = market makers dampen moves (tighter range, safer for bonding); negative gamma = market makers amplify moves (wider range, higher breach risk). Then: how many expected daily moves (ATR or DVOL-derived) would need to occur to breach the strike? Reference historical max H-L and any macro catalysts. This is about TAIL RISK, not trend.]
 
 **STRIKE SELECTION**:
 [Name the exact strike, YES or NO, and its entry price in ¢ (must be between 99¢ and 99.9¢). State the cushion in USD and the safety ratio. Explain in one sentence what single event would invalidate this trade.]"""
@@ -750,6 +900,7 @@ _vol1 = (d.get("vol") or {}).get("1m") or {}
 _vol6 = (d.get("vol") or {}).get("6m") or {}
 _fund = d.get("funding") or {}
 _etff = d.get("etf_flows") or {}
+_gex  = d.get("gex") or {}
 
 _news = d.get("news") or []
 _news_summary = "\n".join(
@@ -775,6 +926,9 @@ with st.spinner("Running AI analysis…"):
         funding_rate    = _fund.get("rate_pct"),
         etf_flow_today  = _etff.get("today"),
         ff_count        = len(d.get("ff") or []),
+        gex_net_bn      = _gex.get("net_gex_bn"),
+        gex_regime      = _gex.get("regime", ""),
+        gex_flip        = _gex.get("flip_level"),
         news_headlines  = _news_summary,
         poly_summary    = _poly_summary,
     )

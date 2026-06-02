@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from datetime import date, datetime, time, timedelta, timezone
@@ -393,6 +394,127 @@ def get_deribit_dvol() -> float | None:
         return float(candles[-1][4])            # close of last candle
     except Exception:
         return None
+
+
+# ── BTC GEX (Deribit options) ─────────────────────────────────────────────────
+
+_MONTHS = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
+           "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
+
+
+def _bs_gamma(S: float, K: float, T: float, sigma: float) -> float:
+    """Black-Scholes gamma (same formula for calls and puts)."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    try:
+        d1 = (math.log(S / K) + 0.5 * sigma ** 2 * T) / (sigma * math.sqrt(T))
+        return math.exp(-0.5 * d1 ** 2) / (S * sigma * math.sqrt(2 * math.pi * T))
+    except Exception:
+        return 0.0
+
+
+def _expiry_years(date_code: str) -> float:
+    """Parse Deribit date code like '23MAY26' → years to expiry from today."""
+    try:
+        day   = int(date_code[:2])
+        month = _MONTHS[date_code[2:5].upper()]
+        year  = 2000 + int(date_code[5:7])
+        T = (date(year, month, day) - date.today()).days / 365.0
+        return max(T, 0.5 / 365)   # floor at ~12 h so gamma stays finite
+    except Exception:
+        return 0.0
+
+
+def get_btc_gex() -> dict | None:
+    """Net Gamma Exposure from all active BTC options on Deribit.
+
+    Deribit book summary doesn't expose gamma directly, so we compute it via
+    Black-Scholes using mark_iv (available in the response) and the strike /
+    expiry parsed from the instrument name.
+
+    GEX = Σ(call_gamma × call_OI − put_gamma × put_OI) × spot²
+    Positive GEX → dealers long gamma → stabilising (mean-reversion).
+    Negative GEX → dealers short gamma → destabilising (trending/volatile).
+    """
+    data = _get(
+        "https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
+        {"currency": "BTC", "kind": "option"},
+        timeout=20,
+    )
+    if not data or "result" not in data:
+        return None
+    instruments = data.get("result", [])
+    if not instruments:
+        return None
+
+    # Underlying spot from the first instrument that carries it
+    spot = None
+    for inst in instruments:
+        up = inst.get("underlying_price")
+        if up:
+            spot = float(up)
+            break
+    if not spot:
+        return None
+
+    call_gex = 0.0
+    put_gex  = 0.0
+    gex_by_strike: dict[float, float] = {}
+
+    for inst in instruments:
+        name  = inst.get("instrument_name", "")
+        parts = name.split("-")
+        if len(parts) < 4:
+            continue                      # skip if not a valid option name
+        opt_type   = parts[-1]            # "C" or "P"
+        date_code  = parts[1]             # e.g. "23MAY26"
+        try:
+            strike = float(parts[-2])
+        except ValueError:
+            continue
+
+        mark_iv = float(inst.get("mark_iv") or 0) / 100   # % → decimal
+        oi      = float(inst.get("open_interest") or 0)
+        if mark_iv <= 0 or oi <= 0:
+            continue
+
+        T     = _expiry_years(date_code)
+        gamma = _bs_gamma(spot, strike, T, mark_iv)
+        gex   = gamma * oi * spot * spot
+
+        if opt_type == "C":
+            call_gex += gex
+            gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + gex
+        else:
+            put_gex  += gex
+            gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) - gex
+
+    net_gex = call_gex - put_gex
+
+    # Gamma flip — strike nearest to spot where per-strike net GEX changes sign
+    near = sorted(s for s in gex_by_strike if 0.8 * spot <= s <= 1.2 * spot)
+    flip_level = None
+    for i in range(1, len(near)):
+        g1, g2 = gex_by_strike[near[i - 1]], gex_by_strike[near[i]]
+        if (g1 < 0 <= g2) or (g1 >= 0 > g2):
+            denom = abs(g1) + abs(g2)
+            w = abs(g1) / denom if denom > 0 else 0.5
+            flip_level = near[i - 1] + (near[i] - near[i - 1]) * w
+            break
+
+    # Per-strike data for chart — filter to ±35% around spot, convert to $M, sort
+    chart_strikes = {k: v / 1e6 for k, v in gex_by_strike.items()
+                     if abs(k - spot) <= spot * 0.35}
+    chart_strikes = dict(sorted(chart_strikes.items()))
+
+    return {
+        "net_gex_bn":    net_gex  / 1e9,
+        "call_gex_bn":   call_gex / 1e9,
+        "put_gex_bn":    put_gex  / 1e9,
+        "regime":        "positive" if net_gex >= 0 else "negative",
+        "flip_level":    flip_level,
+        "gex_by_strike": chart_strikes,   # {strike: gex_in_$M}
+    }
 
 
 # ── Polymarket ────────────────────────────────────────────────────────────────

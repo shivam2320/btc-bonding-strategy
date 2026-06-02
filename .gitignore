@@ -35,3 +35,5 @@ backtest/.mplconfig/
 # Environment
 .env
 .env.*
+
+.claude
