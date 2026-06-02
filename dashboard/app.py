@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -234,8 +234,17 @@ def load_slow_data() -> dict:
         "etf_flows":  fetchers.get_etf_flows(),
         "fear_greed": fetchers.get_fear_greed(),
         "dvol":       fetchers.get_deribit_dvol(),
-        "gex":        fetchers.get_btc_gex(),
     }
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_strike_gex(strikes_tuple: tuple, market_date_str: str, spot_k: int) -> dict:
+    """Per-strike GEX via Deribit ticker — one call per option, real greeks."""
+    return fetchers.get_gex_for_strikes(
+        list(strikes_tuple),
+        date.fromisoformat(market_date_str),
+        float(spot_k * 1000),   # spot_k is spot/1000 rounded, re-expand here
+    )
 
 
 if refresh:
@@ -256,6 +265,12 @@ vol     = d["vol"]
 # Session info — computed fresh each render (no API call)
 market_date, session_start, session_end = fetchers.active_session_date()
 session_open = d.get("session_open")
+
+# Unpack poly and load per-strike GEX early so col_vol can use it
+poly_list, found_date = d["poly"]
+_poly_strikes_tuple = tuple(sorted(int(m["strike"]) for m in poly_list if m.get("strike")))
+_spot_k = int(round((spot or 0) / 1000))
+_strike_gex: dict = load_strike_gex(_poly_strikes_tuple, market_date.isoformat(), _spot_k) if (_poly_strikes_tuple and spot) else {}
 
 # ── Session strip ─────────────────────────────────────────────────────────────
 remaining     = session_end - now_ist
@@ -568,32 +583,29 @@ with col_vol:
         )
 
     # ── GEX ───────────────────────────────────────────────────────────────────
-    gex = d.get("gex")
-    if gex:
-        net_m   = gex["net_gex_bn"]  * 1000   # $B → $M for readable display
-        calls_m = gex["call_gex_bn"] * 1000
-        puts_m  = gex["put_gex_bn"]  * 1000
-        flip    = gex["flip_level"]
-        if gex["regime"] == "positive":
+    if _strike_gex:
+        net_m   = sum(v["net_gex_m"]  for v in _strike_gex.values())
+        calls_m = sum(v["call_gex_m"] for v in _strike_gex.values())
+        puts_m  = sum(v["put_gex_m"]  for v in _strike_gex.values())
+        if net_m >= 0:
             gex_color, gex_label, gex_note = "green", "Positive Gamma", "Stabilising · range-bound moves expected"
         else:
             gex_color, gex_label, gex_note = "red",   "Negative Gamma", "Destabilising · trending/volatile moves expected"
-        flip_str = f"&nbsp;·&nbsp; Flip ~<b>${flip:,.0f}</b>" if flip else ""
         st.markdown(
             f"<div class='card'>"
-            f"<span class='muted'>Net GEX (Deribit · BS approx)</span>"
+            f"<span class='muted'>Net GEX (Deribit · Poly strikes)</span>"
             f"&nbsp;&nbsp;<b>${net_m:+,.0f}M</b>"
             f"&nbsp;&nbsp;<span class='{gex_color}'>{gex_label}</span><br>"
             f"<span class='muted' style='font-size:0.75rem'>{gex_note}</span><br>"
             f"<span class='muted' style='font-size:0.75rem'>"
             f"Calls <span class='green'>${calls_m:,.0f}M</span>"
             f"&nbsp;&nbsp;Puts <span class='red'>${puts_m:,.0f}M</span>"
-            f"{flip_str}</span>"
+            f"</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
 
-    if not fg and not rv and not dvol and not gex:
+    if not fg and not rv and not dvol and not _strike_gex:
         st.markdown("<div class='card muted'>Live signals unavailable</div>", unsafe_allow_html=True)
 
     st.markdown("<br><div class='sec-hdr'>Historical Volatility</div>", unsafe_allow_html=True)
@@ -648,16 +660,8 @@ with col_vol:
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown("<div class='sec-hdr'>GEX Profile by Strike · All Expirations</div>", unsafe_allow_html=True)
 
-_gex_all    = (d.get("gex") or {}).get("gex_by_strike") or {}
-_poly_strikes = sorted(m["strike"] for m in (d["poly"][0] or []) if m.get("strike"))
-_deribit_keys = sorted(_gex_all.keys())
-
-# Map each Polymarket strike to the nearest Deribit strike (within $1 000 tolerance)
-_gex_chart: dict[float, float] = {}
-for ps in _poly_strikes:
-    if _deribit_keys:
-        closest = min(_deribit_keys, key=lambda s: abs(s - ps))
-        _gex_chart[ps] = _gex_all[closest] if abs(closest - ps) < 1000 else 0.0
+# _strike_gex keyed by float(strike) → {"net_gex_m", "call_gex_m", "put_gex_m"}
+_gex_chart = {s: v["net_gex_m"] for s, v in _strike_gex.items()}
 
 if _gex_chart and spot:
     _strikes  = sorted(_gex_chart.keys())
@@ -762,8 +766,7 @@ new Chart(document.getElementById('gex'), {{
 else:
     st.markdown("<div class='card muted'>GEX by strike unavailable</div>", unsafe_allow_html=True)
 
-# Unpack poly data — market_date/session_start/session_end already computed above
-poly_list, found_date = d["poly"]
+# poly_list and found_date already unpacked above (before 3-column section)
 
 
 # ── Row 3: AI Analysis ────────────────────────────────────────────────────────
@@ -900,7 +903,10 @@ _vol1 = (d.get("vol") or {}).get("1m") or {}
 _vol6 = (d.get("vol") or {}).get("6m") or {}
 _fund = d.get("funding") or {}
 _etff = d.get("etf_flows") or {}
-_gex  = d.get("gex") or {}
+
+# Derive GEX aggregate values from targeted per-strike data
+_gex_net_m = sum(v["net_gex_m"]  for v in _strike_gex.values()) if _strike_gex else None
+_gex_regime = ("positive" if (_gex_net_m or 0) >= 0 else "negative") if _gex_net_m is not None else ""
 
 _news = d.get("news") or []
 _news_summary = "\n".join(
@@ -926,9 +932,9 @@ with st.spinner("Running AI analysis…"):
         funding_rate    = _fund.get("rate_pct"),
         etf_flow_today  = _etff.get("today"),
         ff_count        = len(d.get("ff") or []),
-        gex_net_bn      = _gex.get("net_gex_bn"),
-        gex_regime      = _gex.get("regime", ""),
-        gex_flip        = _gex.get("flip_level"),
+        gex_net_bn      = (_gex_net_m / 1000) if _gex_net_m is not None else None,
+        gex_regime      = _gex_regime,
+        gex_flip        = None,
         news_headlines  = _news_summary,
         poly_summary    = _poly_summary,
     )
