@@ -234,6 +234,7 @@ def load_slow_data() -> dict:
         "etf_flows":  fetchers.get_etf_flows(),
         "fear_greed": fetchers.get_fear_greed(),
         "dvol":       fetchers.get_deribit_dvol(),
+        "gex_all":    fetchers.get_btc_gex(),    # all expirations — for chart
     }
 
 
@@ -663,8 +664,20 @@ with col_vol:
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown("<div class='sec-hdr'>GEX Profile by Strike · All Expirations</div>", unsafe_allow_html=True)
 
-# _strike_gex keyed by float(strike) → {"net_gex_m", "call_gex_m", "put_gex_m"}
-_gex_chart = {s: v["net_gex_m"] for s, v in _strike_gex.items()}
+# Chart uses ALL-expirations book summary (like Laevitas) mapped to Polymarket strikes
+_gex_all_strikes = (d.get("gex_all") or {}).get("gex_by_strike") or {}
+_deribit_keys     = sorted(_gex_all_strikes.keys())
+_gex_chart: dict[float, float] = {}
+for _ps in sorted(float(m["strike"]) for m in poly_list if m.get("strike")):
+    if _deribit_keys:
+        _closest = min(_deribit_keys, key=lambda s: abs(s - _ps))
+        if abs(_closest - _ps) < 2000:
+            _gex_chart[_ps] = _gex_all_strikes[_closest]
+
+# Fall back to today-only ticker data if book summary returned nothing
+if not _gex_chart and _strike_gex:
+    _gex_chart = {s: v["net_gex_m"] for s, v in _strike_gex.items()
+                  if abs(v["net_gex_m"]) > 0.5}
 
 if _gex_chart and spot:
     _strikes  = sorted(_gex_chart.keys())
@@ -766,6 +779,11 @@ new Chart(document.getElementById('gex'), {{
 }});
 </script>
 </body></html>""", height=300)
+    _src = "all expirations" if _gex_all_strikes else "today's expiry only"
+    st.markdown(
+        f"<span class='muted' style='font-size:0.7rem'>Source: Deribit · {_src}</span>",
+        unsafe_allow_html=True,
+    )
 else:
     st.markdown("<div class='card muted'>GEX by strike unavailable</div>", unsafe_allow_html=True)
 
