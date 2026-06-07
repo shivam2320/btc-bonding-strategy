@@ -13,6 +13,8 @@ IST = ZoneInfo("Asia/Kolkata")
 _SESSION_START = time(21, 30)  # 9:30 PM IST — matches backtest/common.py
 from pathlib import Path
 
+import os
+
 import numpy as np
 import pandas as pd
 import requests
@@ -20,12 +22,15 @@ import requests
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "backtest"))
 
-BINANCE      = "https://api.binance.com"
-COINGECKO    = "https://api.coingecko.com/api/v3"
-KRAKEN       = "https://api.kraken.com/0/public"
-BYBIT        = "https://api.bybit.com/v5"
-GAMMA_API    = "https://gamma-api.polymarket.com"
-NEWSAPI_KEY  = "83994ea8-14b0-404e-9f0f-282a2d0b7c9d"
+BINANCE   = "https://api.binance.com"
+COINGECKO = "https://api.coingecko.com/api/v3"
+KRAKEN    = "https://api.kraken.com/0/public"
+BYBIT     = "https://api.bybit.com/v5"
+GAMMA_API = "https://gamma-api.polymarket.com"
+
+def _secret(name: str) -> str:
+    """Read API key from environment (populated from st.secrets by app.py at startup)."""
+    return os.environ.get(name, "")
 
 _SESS = requests.Session()
 _SESS.headers.update({"User-Agent": "Mozilla/5.0"})
@@ -256,7 +261,7 @@ def get_crypto_news() -> list[dict]:
             "articlesSortBy":    "date",
             "articlesSortByAsc": "false",
             "resultType":        "articles",
-            "apiKey":            NEWSAPI_KEY,
+            "apiKey":            _secret("NEWSAPI_KEY"),
         },
         timeout=12,
     )
@@ -313,6 +318,23 @@ def get_funding_rate() -> dict:
         return {}
 
 
+def get_funding_history(limit: int = 8) -> list[dict]:
+    """Last N funding rate periods from Bybit."""
+    data = _get(f"{BYBIT}/market/funding/history", {
+        "category": "linear", "symbol": "BTCUSDT", "limit": limit,
+    })
+    try:
+        return [
+            {
+                "rate_pct": float(item["fundingRate"]) * 100,
+                "ts": datetime.fromtimestamp(int(item["fundingRateTimestamp"]) / 1000, tz=timezone.utc),
+            }
+            for item in data["result"]["list"]
+        ]
+    except Exception:
+        return []
+
+
 def get_open_interest() -> float | None:
     # Bybit
     data = _get(f"{BYBIT}/market/open-interest", {
@@ -328,6 +350,24 @@ def get_open_interest() -> float | None:
         return float(data["data"][0]["oi"])
     except Exception:
         return None
+
+
+def get_oi_history(limit: int = 8) -> list[dict]:
+    """Last N hourly OI snapshots from Bybit. Oldest → newest (index 0 = oldest)."""
+    data = _get(f"{BYBIT}/market/open-interest", {
+        "category": "linear", "symbol": "BTCUSDT", "intervalTime": "1h", "limit": limit,
+    })
+    try:
+        items = data["result"]["list"]   # newest first from Bybit
+        return [
+            {
+                "oi":  float(item["openInterest"]),
+                "ts":  datetime.fromtimestamp(int(item["timestamp"]) / 1000, tz=timezone.utc),
+            }
+            for item in reversed(items)  # reverse so index 0 = oldest
+        ]
+    except Exception:
+        return []
 
 
 def get_etf_flows() -> dict | None:
@@ -402,6 +442,21 @@ _MONTHS = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
            "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
 
 
+def _norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _bs_delta(S: float, K: float, T: float, sigma: float, is_call: bool = True) -> float:
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 1.0 if is_call else 0.0
+    try:
+        d1  = (math.log(S / K) + 0.5 * sigma ** 2 * T) / (sigma * math.sqrt(T))
+        nd1 = _norm_cdf(d1)
+        return nd1 if is_call else nd1 - 1.0
+    except Exception:
+        return 0.5 if is_call else -0.5
+
+
 def _bs_gamma(S: float, K: float, T: float, sigma: float) -> float:
     """Black-Scholes gamma (same formula for calls and puts)."""
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
@@ -423,6 +478,104 @@ def _expiry_years(date_code: str) -> float:
         return max(T, 0.5 / 365)   # floor at ~12 h so gamma stays finite
     except Exception:
         return 0.0
+
+
+def get_options_skew() -> dict | None:
+    """25-delta risk reversal from Deribit options (7–30 DTE).
+    RR = call_25d_IV − put_25d_IV.  Positive = bullish skew, negative = bearish.
+    """
+    try:
+        data = _get(
+            "https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
+            {"currency": "BTC", "kind": "option"},
+            timeout=20,
+        )
+        if not data or not isinstance(data, dict) or "result" not in data:
+            return None
+        instruments = data.get("result", [])
+        if not isinstance(instruments, list):
+            return None
+
+        spot = None
+        for inst in instruments:
+            if isinstance(inst, dict) and inst.get("underlying_price"):
+                spot = float(inst["underlying_price"])
+                break
+        if not spot:
+            return None
+
+        calls: list[tuple[float, float]] = []   # (|delta-0.25|, iv)
+        puts:  list[tuple[float, float]] = []   # (|delta+0.25|, iv)
+
+        for inst in instruments:
+            if not isinstance(inst, dict):
+                continue
+            name  = inst.get("instrument_name", "")
+            parts = name.split("-")
+            if len(parts) < 4:
+                continue
+            opt_type  = parts[-1]
+            date_code = parts[1]
+            try:
+                strike = float(parts[-2])
+            except ValueError:
+                continue
+
+            mark_iv = float(inst.get("mark_iv") or 0) / 100
+            oi      = float(inst.get("open_interest") or 0)
+            if mark_iv <= 0 or oi <= 0:
+                continue
+
+            T = _expiry_years(date_code)
+            if T < 3 / 365 or T > 30 / 365:     # 3–30 DTE window
+                continue
+
+            is_call = opt_type == "C"
+            delta   = _bs_delta(spot, strike, T, mark_iv, is_call)
+
+            if is_call:
+                calls.append((abs(delta - 0.25), mark_iv * 100))
+            else:
+                puts.append((abs(delta - (-0.25)), mark_iv * 100))
+
+        if not calls or not puts:
+            return None
+
+        call_iv = min(calls, key=lambda x: x[0])[1]
+        put_iv  = min(puts,  key=lambda x: x[0])[1]
+        rr      = round(call_iv - put_iv, 2)
+
+        return {
+            "rr":          rr,
+            "call_25d_iv": round(call_iv, 1),
+            "put_25d_iv":  round(put_iv,  1),
+            "regime":      "bullish" if rr > 1 else "bearish" if rr < -1 else "neutral",
+        }
+    except Exception:
+        return None
+
+
+def get_session_vwap(session_start_ist: "datetime") -> float | None:
+    """Session VWAP from Binance 1h klines since session start."""
+    try:
+        utc      = session_start_ist.astimezone(timezone.utc)
+        start_ms = int(utc.timestamp() * 1000)
+        data = _get(f"{BINANCE}/api/v3/klines", {
+            "symbol":    "BTCUSDT",
+            "interval":  "1h",
+            "startTime": start_ms,
+            "limit":     24,
+        })
+        if not isinstance(data, list) or not data:
+            return None
+        tpv = vol = 0.0
+        for c in data:
+            h, l, cl, v = float(c[2]), float(c[3]), float(c[4]), float(c[5])
+            tpv += ((h + l + cl) / 3) * v
+            vol += v
+        return tpv / vol if vol else None
+    except Exception:
+        return None
 
 
 def get_btc_gex() -> dict | None:

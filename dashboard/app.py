@@ -21,6 +21,12 @@ import fetchers
 
 IST = ZoneInfo("Asia/Kolkata")
 
+# Push Streamlit secrets → os.environ so fetchers.py can read them via os.environ.get()
+import os as _os
+for _k in ("NEWSAPI_KEY", "OPENROUTER_API_KEY"):
+    if _k in st.secrets and not _os.environ.get(_k):
+        _os.environ[_k] = st.secrets[_k]
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="BTC Trade Dashboard",
@@ -210,11 +216,12 @@ def load_price_data() -> dict:
         "atr":     fetchers.compute_atr(ohlc),
         "emas":    fetchers.compute_emas(ohlc),
         "session_open": session_open,
+        "vwap":    fetchers.get_session_vwap(session_start),
         "vol":     fetchers.get_volatility_metrics(ohlc),
         "rv":      fetchers.get_realized_vol(ohlc),
         "funding": fetchers.get_funding_rate(),
         "oi":      fetchers.get_open_interest(),
-        "poly":    fetchers.get_polymarket_btc_markets(),   # returns (list, found_date)
+        "poly":    fetchers.get_polymarket_btc_markets(),
     }
 
 
@@ -232,9 +239,12 @@ def load_slow_data() -> dict:
         "ff_error":   ff_error,
         "news":       fetchers.get_crypto_news(),
         "etf_flows":  fetchers.get_etf_flows(),
-        "fear_greed": fetchers.get_fear_greed(),
-        "dvol":       fetchers.get_deribit_dvol(),
-        "gex_all":    fetchers.get_btc_gex(),    # all expirations — for chart
+        "fear_greed":       fetchers.get_fear_greed(),
+        "dvol":             fetchers.get_deribit_dvol(),
+        "skew":             fetchers.get_options_skew(),
+        "funding_history":  fetchers.get_funding_history(8),
+        "oi_history":       fetchers.get_oi_history(8),
+        "gex_all":          fetchers.get_btc_gex(),
     }
 
 
@@ -283,7 +293,8 @@ hours, r      = divmod(total_secs, 3600)
 mins          = r // 60
 countdown_str = f"{hours}h {mins:02d}m"
 
-ss1, ss2, ss3, ss4 = st.columns(4)
+ss1, ss2, ss3, ss4, ss5 = st.columns(5)
+session_vwap = d.get("vwap")
 with ss1:
     st.metric("Session Open (BTC)", f"${session_open:,.0f}" if session_open else "—")
 with ss2:
@@ -294,8 +305,15 @@ with ss2:
     else:
         st.metric("Move Since Open", "—")
 with ss3:
-    st.metric("Session Ends", session_end.strftime("%d %b %H:%M IST"))
+    if session_vwap and spot:
+        vwap_diff = spot - session_vwap
+        vwap_lbl  = "▲ Above" if vwap_diff > 0 else "▼ Below"
+        st.metric("Session VWAP", f"${session_vwap:,.0f}", delta=f"{vwap_lbl} by ${abs(vwap_diff):,.0f}")
+    else:
+        st.metric("Session VWAP", f"${session_vwap:,.0f}" if session_vwap else "—")
 with ss4:
+    st.metric("Session Ends", session_end.strftime("%d %b %H:%M IST"))
+with ss5:
     st.metric("Time Remaining", countdown_str)
 
 st.markdown("<hr>", unsafe_allow_html=True)
@@ -423,15 +441,65 @@ with col_trend:
             unsafe_allow_html=True,
         )
 
+    # ── Funding history ───────────────────────────────────────────────────────
+    fh = d.get("funding_history") or []
+    if fh:
+        dots = ""
+        for p in reversed(fh):   # oldest → newest left to right
+            r = p["rate_pct"]
+            c = "#00D4A8" if r > 0 else "#FF3D54"
+            dots += f"<span style='color:{c};font-size:0.85rem'>{'▲' if r > 0 else '▼'}</span>"
+            dots += f"<span style='color:{c};font-size:0.7rem'>{r:+.3f}%&nbsp;&nbsp;</span>"
+        pos = sum(1 for p in fh if p["rate_pct"] > 0)
+        trend_lbl = "Persistently long" if pos >= 6 else "Mostly short" if pos <= 2 else "Mixed"
+        trend_col = "red" if pos >= 6 else "green" if pos <= 2 else "yellow"
+        st.markdown(
+            f"<div class='card'>"
+            f"<span class='muted'>Funding History (last {len(fh)})</span><br>"
+            f"<div style='margin:4px 0;line-height:1.8'>{dots}</div>"
+            f"<span class='{trend_col}' style='font-size:0.73rem'>{trend_lbl}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
     oi = d["oi"]
+    oih = d.get("oi_history") or []
     if oi:
         oi_str = f"{oi:,.0f} BTC"
         if spot:
             oi_usd = oi * spot
             oi_str = f"{oi:,.0f} BTC (${oi_usd/1e9:.2f}B)"
+
+        # Build history with delta numbers and trend label
+        oi_dots = ""
+        if len(oih) >= 2:
+            for i in range(1, len(oih)):
+                delta_btc = oih[i]["oi"] - oih[i - 1]["oi"]
+                delta_m   = delta_btc * (spot or 0) / 1e6
+                c = "#00D4A8" if delta_btc > 0 else "#FF3D54"
+                oi_dots += (
+                    f"<span style='color:{c};font-size:0.82rem'>{'▲' if delta_btc > 0 else '▼'}</span>"
+                    f"<span style='color:{c};font-size:0.68rem'>${delta_m:+,.0f}M&nbsp;&nbsp;</span>"
+                )
+            rising = sum(1 for i in range(1, len(oih)) if oih[i]["oi"] > oih[i-1]["oi"])
+            total  = len(oih) - 1
+            if rising >= total * 0.7:
+                oi_trend_lbl, oi_trend_col = "Building", "green"
+            elif rising <= total * 0.3:
+                oi_trend_lbl, oi_trend_col = "Unwinding", "red"
+            else:
+                oi_trend_lbl, oi_trend_col = "Mixed", "yellow"
+            oi_history_html = (
+                f"<br><div style='margin:3px 0;line-height:1.8'>{oi_dots}</div>"
+                f"<span class='{oi_trend_col}' style='font-size:0.73rem'>{oi_trend_lbl}</span>"
+            )
+        else:
+            oi_history_html = ""
+
         st.markdown(
             f"<div class='card'>"
             f"<span class='muted'>Open Interest</span>&nbsp;&nbsp;<b>{oi_str}</b>"
+            f"{oi_history_html}"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -586,18 +654,43 @@ with col_vol:
             unsafe_allow_html=True,
         )
 
-    # ── GEX ───────────────────────────────────────────────────────────────────
-    if _strike_gex:
-        net_m   = sum(v["net_gex_m"]  for v in _strike_gex.values())
-        calls_m = sum(v["call_gex_m"] for v in _strike_gex.values())
-        puts_m  = sum(v["put_gex_m"]  for v in _strike_gex.values())
-        if net_m >= 0:
+    # ── Options Skew ─────────────────────────────────────────────────────────
+    skew = d.get("skew")
+    if skew:
+        rr = skew["rr"]
+        if skew["regime"] == "bullish":
+            sk_color, sk_label = "green", "Bullish skew · calls pricier"
+        elif skew["regime"] == "bearish":
+            sk_color, sk_label = "red",   "Bearish skew · puts pricier"
+        else:
+            sk_color, sk_label = "yellow", "Neutral skew"
+        st.markdown(
+            f"<div class='card'>"
+            f"<span class='muted'>25Δ Risk Reversal (7–30 DTE)</span>"
+            f"&nbsp;&nbsp;<b>{rr:+.2f}</b>"
+            f"&nbsp;&nbsp;<span class='{sk_color}'>{sk_label}</span><br>"
+            f"<span class='muted' style='font-size:0.75rem'>"
+            f"Call 25Δ IV <b>{skew['call_25d_iv']:.1f}%</b>"
+            f"&nbsp;&nbsp;Put 25Δ IV <b>{skew['put_25d_iv']:.1f}%</b>"
+            f"</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── GEX ── use all-expirations book summary (same source as chart) ──────────
+    _gex_card = d.get("gex_all") or {}
+    if _gex_card:
+        net_m   = _gex_card.get("net_gex_bn",  0) * 1000   # $B → $M
+        calls_m = _gex_card.get("call_gex_bn", 0) * 1000
+        puts_m  = _gex_card.get("put_gex_bn",  0) * 1000
+        regime  = _gex_card.get("regime", "positive")
+        if regime == "positive":
             gex_color, gex_label, gex_note = "green", "Positive Gamma", "Stabilising · range-bound moves expected"
         else:
             gex_color, gex_label, gex_note = "red",   "Negative Gamma", "Destabilising · trending/volatile moves expected"
         st.markdown(
             f"<div class='card'>"
-            f"<span class='muted'>Net GEX (Deribit · Poly strikes)</span>"
+            f"<span class='muted'>Net GEX (Deribit · All Expirations)</span>"
             f"&nbsp;&nbsp;<b>${net_m:+,.0f}M</b>"
             f"&nbsp;&nbsp;<span class='{gex_color}'>{gex_label}</span><br>"
             f"<span class='muted' style='font-size:0.75rem'>{gex_note}</span><br>"
@@ -609,7 +702,7 @@ with col_vol:
             unsafe_allow_html=True,
         )
 
-    if not fg and not rv and not dvol and not _strike_gex:
+    if not fg and not rv and not dvol and not _gex_card:
         st.markdown("<div class='card muted'>Live signals unavailable</div>", unsafe_allow_html=True)
 
     st.markdown("<br><div class='sec-hdr'>Historical Volatility</div>", unsafe_allow_html=True)
@@ -815,6 +908,9 @@ def load_ai_analysis(
     gex_net_bn,
     gex_regime,
     gex_flip,
+    skew_rr,
+    skew_regime,
+    vwap,
     news_headlines,
     poly_summary,
 ) -> str:
@@ -837,6 +933,8 @@ Funding rate: {_fmt(funding_rate, "+.4f", suffix="%")}
 ETF net flow today: {_fmt(etf_flow_today, "+,.1f", "$", "M")}
 High-impact macro events today: {ff_count}
 Net GEX: {f"${gex_net_bn * 1000:+,.0f}M ({gex_regime.upper()} GAMMA)" if gex_net_bn is not None else "N/A"}{f"  |  Gamma flip: ~${gex_flip:,.0f}" if gex_flip else ""}
+25Δ Risk Reversal: {f"{skew_rr:+.2f} ({skew_regime.upper()} SKEW)" if skew_rr is not None else "N/A"}
+Session VWAP: {f"${vwap:,.0f}  |  Spot {'above' if spot and vwap and spot > vwap else 'below'} VWAP by ${abs((spot or 0) - (vwap or 0)):,.0f}" if vwap else "N/A"}
 
 BTC NEWS HEADLINES (latest):
 {news_headlines}
@@ -863,7 +961,7 @@ Respond in EXACTLY this format (2–3 sentences each, specific numbers required)
 [Lead with the news headlines — do any suggest imminent shock (regulation, macro event, whale move, exchange issue)? Then assess: DVOL level, vol regime (expanding/contracting), ETF flows, Fear & Greed, macro event count. TRADE = calm news + calm vol; CAUTION = one risk factor; SKIP = news risk OR multiple vol risks stacking up OR no valid bond exists.]
 
 **TREND**:
-[Start with what the news headlines say about current market narrative — bullish catalyst, bearish pressure, or neutral? Then: where is spot vs EMA20/50/200? Is today's 24h move a continuation or reversal? What does funding rate suggest? Conclude which side (YES or NO bond) has more tailwind given both price structure and news.]
+[Start with what the news headlines say about current market narrative — bullish catalyst, bearish pressure, or neutral? Then: is spot above or below session VWAP (mean-reversion signal)? Where is spot vs EMA20/50/200? What does 25Δ skew say about options market bias (bullish/bearish)? What does funding rate suggest? Conclude which side (YES or NO bond) has more tailwind.]
 
 **RISK ASSESSMENT**:
 [Lead with GEX regime: positive gamma = market makers dampen moves (tighter range, safer for bonding); negative gamma = market makers amplify moves (wider range, higher breach risk). Then: how many expected daily moves (ATR or DVOL-derived) would need to occur to breach the strike? Reference historical max H-L and any macro catalysts. This is about TAIL RISK, not trend.]
@@ -925,9 +1023,10 @@ _vol6 = (d.get("vol") or {}).get("6m") or {}
 _fund = d.get("funding") or {}
 _etff = d.get("etf_flows") or {}
 
-# Derive GEX aggregate values from targeted per-strike data
-_gex_net_m = sum(v["net_gex_m"]  for v in _strike_gex.values()) if _strike_gex else None
-_gex_regime = ("positive" if (_gex_net_m or 0) >= 0 else "negative") if _gex_net_m is not None else ""
+# GEX aggregate from all-expirations book summary (same source as card + chart)
+_gex_all_data = d.get("gex_all") or {}
+_gex_net_m  = (_gex_all_data.get("net_gex_bn", 0) * 1000) if _gex_all_data else None
+_gex_regime = _gex_all_data.get("regime", "") if _gex_all_data else ""
 
 _news = d.get("news") or []
 _news_summary = "\n".join(
@@ -956,6 +1055,9 @@ with st.spinner("Running AI analysis…"):
         gex_net_bn      = (_gex_net_m / 1000) if _gex_net_m is not None else None,
         gex_regime      = _gex_regime,
         gex_flip        = None,
+        skew_rr         = (d.get("skew") or {}).get("rr"),
+        skew_regime     = (d.get("skew") or {}).get("regime", ""),
+        vwap            = d.get("vwap"),
         news_headlines  = _news_summary,
         poly_summary    = _poly_summary,
     )
