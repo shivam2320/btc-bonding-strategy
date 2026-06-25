@@ -305,7 +305,7 @@ def _build_sidebar_html() -> str:
         for label, icon, slug in items:
             active_cls = " active" if page == label else ""
             rows.append(
-                f'<a href="?p={slug}" class="sb-link{active_cls}" data-p="{slug}">'
+                f'<a href="?p={slug}" class="sb-link{active_cls}" data-p="{slug}" target="_top">'
                 f'<i class="bi {icon}"></i>'
                 f'<span>{label}</span>'
                 f'</a>'
