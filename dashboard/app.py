@@ -21,25 +21,28 @@ import fetchers
 
 IST = ZoneInfo("Asia/Kolkata")
 
-# Push Streamlit secrets → os.environ so fetchers.py can read them via os.environ.get()
 import os as _os
-for _k in ("NEWSAPI_KEY", "OPENROUTER_API_KEY"):
-    if _k in st.secrets and not _os.environ.get(_k):
-        _os.environ[_k] = st.secrets[_k]
+try:
+    for _k in ("NEWSAPI_KEY", "OPENROUTER_API_KEY"):
+        if _k in st.secrets and not _os.environ.get(_k):
+            _os.environ[_k] = st.secrets[_k]
+except Exception:
+    pass  # no secrets.toml — keys must be set via environment variables
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="BTC Trade Dashboard",
     page_icon="₿",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
-# ── Theme CSS ─────────────────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   :root {
     --bg:     #060A0F;
+    --sb:     #070D14;
     --card:   #0A1018;
     --border: #141E2A;
     --green:  #00D4A8;
@@ -53,10 +56,30 @@ st.markdown("""
 
   /* Global */
   .stApp { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
-  .block-container { padding: 0.6rem 2rem 2rem; max-width: 100% !important; }
+  .block-container { padding: 1.2rem 1.8rem 2rem !important; max-width: 100% !important; }
+
+  /* ── Sidebar shell (Streamlit overrides) ── */
+  section[data-testid="stSidebar"] {
+    background: #0C1117 !important;
+    border-right: 1px solid #1A2434 !important;
+    min-width: 248px !important;
+    max-width: 248px !important;
+  }
+  section[data-testid="stSidebar"] > div,
+  section[data-testid="stSidebarContent"],
+  section[data-testid="stSidebar"] .block-container,
+  section[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"],
+  section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    padding: 0 !important;
+    gap: 0 !important;
+    overflow-x: hidden !important;
+    height: 100% !important;
+  }
+  section[data-testid="stSidebarContent"] { overflow-y: hidden !important; }
+  .sb-wrap { height: 100vh !important; }
 
   /* Metric overrides */
-  [data-testid="stMetricValue"] { font-size: 1.3rem !important; font-weight: 700; color: var(--bright) !important; letter-spacing: -0.02em; }
+  [data-testid="stMetricValue"] { font-size: 1.25rem !important; font-weight: 700; color: var(--bright) !important; letter-spacing: -0.02em; }
   [data-testid="stMetricLabel"] { color: var(--muted) !important; font-size: 0.6rem !important; text-transform: uppercase; letter-spacing: 0.14em; }
   [data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
 
@@ -73,6 +96,23 @@ st.markdown("""
     margin-top: 4px;
   }
 
+  /* Page title */
+  .page-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--bright);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    line-height: 1.2;
+  }
+  .page-sub {
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+    margin-bottom: 12px;
+  }
+
   /* Card */
   .card {
     background: var(--card);
@@ -84,6 +124,15 @@ st.markdown("""
     line-height: 1.45;
     color: var(--text);
   }
+  .card-lg {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 1px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+  }
+  .card-num { font-size: 1.4rem; font-weight: 700; color: var(--bright); letter-spacing: -0.02em; line-height: 1.1; }
+  .card-lbl { font-size: 0.57rem; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
 
   /* Signal dot */
   .dot-green { color: var(--green); font-size: 0.6rem; }
@@ -109,39 +158,32 @@ st.markdown("""
   .news-card.info { border-left-color: var(--blue); }
 
   /* Divider */
-  hr { border-color: var(--border) !important; margin: 8px 0; }
+  hr { border-color: var(--border) !important; margin: 10px 0; }
 
-  /* Hide streamlit chrome */
-  #MainMenu { visibility: hidden; }
+  /* Hide Streamlit chrome */
+  #MainMenu  { visibility: hidden; }
   footer     { visibility: hidden; }
-  header     { visibility: hidden; }
+  header     { background: transparent !important; }
+  [data-testid="stToolbar"]    { visibility: hidden; }
+  [data-testid="stDecoration"] { visibility: hidden; }
+  /* Hide sidebar collapse/expand toggle entirely */
+  [data-testid="collapsedControl"]          { display: none !important; }
+  [data-testid="stSidebarCollapseButton"]   { display: none !important; }
 
   /* Dataframe */
   [data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 1px; }
 
-  /* Terminal header */
-  .term-header {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: var(--green);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    line-height: 1;
-  }
-  .term-prompt { color: var(--muted); margin-right: 6px; }
+  /* Terminal cursor */
   .term-cursor {
-    display: inline-block;
-    width: 6px;
-    height: 0.85em;
-    background: var(--green);
-    vertical-align: text-bottom;
-    margin-left: 3px;
-    animation: blink 1.1s step-end infinite;
+    display: inline-block; width: 6px; height: 0.85em;
+    background: var(--green); vertical-align: text-bottom;
+    margin-left: 3px; animation: blink 1.1s step-end infinite;
   }
   @keyframes blink { 50% { opacity: 0; } }
 
-  /* Buttons */
-  .stButton > button {
+  /* Main-area buttons (Refresh, Analyze — not sidebar) */
+  .main .stButton > button,
+  [data-testid="stMainBlockContainer"] .stButton > button {
     background: var(--card) !important;
     border: 1px solid var(--border) !important;
     color: var(--muted) !important;
@@ -152,52 +194,35 @@ st.markdown("""
     padding: 4px 14px !important;
     text-transform: uppercase !important;
   }
-  .stButton > button:hover {
+  .main .stButton > button:hover,
+  [data-testid="stMainBlockContainer"] .stButton > button:hover {
     border-color: var(--green) !important;
     color: var(--green) !important;
   }
+  /* Spinner */
+  [data-testid="stSpinner"] p { font-size: 0.75rem !important; color: var(--muted) !important; }
+
+  /* Sidebar anchor overrides — prevent Streamlit's global link color from leaking in */
+  section[data-testid="stSidebar"] a { color: #5A7590 !important; text-decoration: none !important; }
+  section[data-testid="stSidebar"] a:hover { color: #8AAFC8 !important; }
+  section[data-testid="stSidebar"] a.sb-link.active { color: #00D4A8 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# ── Clocks ────────────────────────────────────────────────────────────────────
 now_utc = datetime.now(timezone.utc)
 now_ist = datetime.now(IST)
 
-hc1, hc2, hc3 = st.columns([4, 2, 1])
-with hc1:
-    st.markdown(
-        "<div class='term-header'>"
-        "<span class='term-prompt'>▶</span>"
-        "BTC Bonding Dashboard"
-        "<span class='term-cursor'></span>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-with hc2:
-    st.markdown(
-        f"<span class='muted' style='font-size:0.8rem'>"
-        f"IST {now_ist.strftime('%d %b %Y · %H:%M:%S')}"
-        f"&nbsp;&nbsp;|&nbsp;&nbsp;"
-        f"UTC {now_utc.strftime('%H:%M')}"
-        f"</span>",
-        unsafe_allow_html=True,
-    )
-with hc3:
-    refresh = st.button("↺ Refresh", use_container_width=True)
 
-st.markdown("<hr>", unsafe_allow_html=True)
-
-
-# ── Fast cache: price/futures data — 60s TTL, cleared on Refresh ──────────────
+# ── Data loading ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=60, show_spinner=False)
 def load_price_data() -> dict:
-    ohlc    = fetchers.get_ohlc()
-    market  = fetchers.get_btc_market()
+    ohlc         = fetchers.get_ohlc()
+    market       = fetchers.get_btc_market()
     _, session_start, _ = fetchers.active_session_date()
     session_open = fetchers.get_session_open_price(session_start)
 
-    # 24h high/low: prefer Binance (real-time), fall back to last Kraken OHLC candle
     h24 = market.get("high_24h") or 0.0
     l24 = market.get("low_24h")  or 0.0
     if not h24 and ohlc is not None and not ohlc.empty:
@@ -217,7 +242,8 @@ def load_price_data() -> dict:
         "emas":    fetchers.compute_emas(ohlc),
         "session_open": session_open,
         "vwap":    fetchers.get_session_vwap(session_start),
-        "vol":     fetchers.get_volatility_metrics(ohlc),
+        "is_weekend": datetime.now(IST).weekday() >= 5,
+        "vol":     fetchers.get_volatility_metrics(ohlc, is_weekend=datetime.now(IST).weekday() >= 5),
         "rv":      fetchers.get_realized_vol(ohlc),
         "funding": fetchers.get_funding_rate(),
         "oi":      fetchers.get_open_interest(),
@@ -225,7 +251,6 @@ def load_price_data() -> dict:
     }
 
 
-# ── Slow cache: news/FF/ETF — 5-min TTL, NOT cleared on Refresh ──────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def load_slow_data() -> dict:
     ff, ff_error = [], False
@@ -235,92 +260,413 @@ def load_slow_data() -> dict:
         ff_error = True
 
     return {
-        "ff":         ff,
-        "ff_error":   ff_error,
-        "news":       fetchers.get_crypto_news(),
-        "etf_flows":  fetchers.get_etf_flows(),
+        "ff":               ff,
+        "ff_error":         ff_error,
+        "news":             fetchers.get_crypto_news(),
+        "etf_flows":        fetchers.get_etf_flows(),
         "fear_greed":       fetchers.get_fear_greed(),
         "dvol":             fetchers.get_deribit_dvol(),
         "skew":             fetchers.get_options_skew(),
         "funding_history":  fetchers.get_funding_history(8),
         "oi_history":       fetchers.get_oi_history(8),
-        "gex_all":          fetchers.get_btc_gex(),
+        "gex_all":          fetchers.get_btc_gex(expiry_date=fetchers.active_session_date()[0]),
     }
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_strike_gex(strikes_tuple: tuple, market_date_str: str, spot_k: int) -> dict:
-    """Per-strike GEX via Deribit ticker — one call per option, real greeks."""
     return fetchers.get_gex_for_strikes(
         list(strikes_tuple),
         date.fromisoformat(market_date_str),
-        float(spot_k * 1000),   # spot_k is spot/1000 rounded, re-expand here
+        float(spot_k * 1000),
     )
 
 
-if refresh:
-    load_price_data.clear()
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+_NAV_GROUPS = [
+    ("MARKET",    [("Dashboard",    "bi-speedometer2",         "dashboard"),
+                   ("Price Chart",  "bi-graph-up-arrow",       "chart")]),
+    ("ANALYTICS", [("GEX",          "bi-lightning-charge-fill", "gex"),
+                   ("Volatility",   "bi-bar-chart-line",        "vol"),
+                   ("Trend",        "bi-graph-up",              "trend")]),
+    ("INTEL",     [("News & Macro", "bi-newspaper",             "news")]),
+    ("STRATEGY",  [("Polymarket",   "bi-grid-3x3-gap",          "poly"),
+                   ("AI Analysis",  "bi-robot",                 "ai")]),
+]
+_PAGE_SLUG = {label: slug for _, items in _NAV_GROUPS for label, _, slug in items}
+_SLUG_PAGE = {v: k for k, v in _PAGE_SLUG.items()}
 
-with st.spinner("Loading market data…"):
+page = _SLUG_PAGE.get(st.query_params.get("p", "dashboard"), "Dashboard")
+
+def _build_sidebar_html() -> str:
+    rows = []
+    for section, items in _NAV_GROUPS:
+        rows.append(f'<div class="sb-sect">{section}</div>')
+        for label, icon, slug in items:
+            active_cls = " active" if page == label else ""
+            rows.append(
+                f'<a href="?p={slug}" class="sb-link{active_cls}" data-p="{slug}">'
+                f'<i class="bi {icon}"></i>'
+                f'<span>{label}</span>'
+                f'</a>'
+            )
+    return "\n".join(rows)
+
+_sb_html = f"""
+<style>
+@import url('https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css');
+
+.sb-wrap {{
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #0C1117;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  overflow: hidden;
+}}
+.sb-logo {{
+  padding: 18px 20px 16px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #CDE0F0;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid #1A2434;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}}
+.sb-logo-left {{ display: flex; align-items: center; gap: 8px; }}
+.sb-btc-icon {{ color: #00D4A8; font-size: 1rem; }}
+.sb-live-dot {{
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #00D4A8;
+  box-shadow: 0 0 7px #00D4A8;
+  animation: sbpulse 2s ease-in-out infinite;
+  flex-shrink: 0;
+}}
+@keyframes sbpulse {{ 0%,100%{{opacity:1}} 50%{{opacity:0.2}} }}
+.sb-nav {{ flex: 1; overflow-y: auto; padding: 8px 0; }}
+.sb-sect {{
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: #2E4155;
+  padding: 14px 20px 4px;
+}}
+.sb-link {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  margin: 1px 10px;
+  border-radius: 6px;
+  text-decoration: none !important;
+  color: #5A7590 !important;
+  font-size: 0.85rem;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  transition: background 0.12s, color 0.12s;
+  line-height: 1;
+}}
+.sb-link i {{ font-size: 0.9rem; flex-shrink: 0; width: 16px; text-align: center; color: inherit !important; }}
+.sb-link span {{ color: inherit !important; }}
+.sb-link:hover {{
+  background: rgba(255,255,255,0.04);
+  color: #8AAFC8 !important;
+  text-decoration: none !important;
+}}
+.sb-link.active {{
+  background: rgba(0,212,168,0.1);
+  color: #00D4A8 !important;
+  font-weight: 500;
+}}
+.sb-link.active i {{ color: #00D4A8 !important; }}
+.sb-time {{
+  padding: 12px 20px;
+  border-top: 1px solid #1A2434;
+  font-size: 0.68rem;
+  color: #2E4155;
+  line-height: 1.9;
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+}}
+</style>
+
+<div class="sb-wrap">
+  <div class="sb-logo">
+    <div class="sb-logo-left">
+      <i class="bi bi-currency-bitcoin sb-btc-icon"></i>
+      BTC Bonding
+    </div>
+    <span class="sb-live-dot"></span>
+  </div>
+  <div class="sb-nav">
+    {_build_sidebar_html()}
+  </div>
+  <div class="sb-time">
+    IST &nbsp; {now_ist.strftime('%H:%M:%S')}<br>
+    UTC &nbsp; {now_utc.strftime('%H:%M:%S')}
+  </div>
+</div>
+"""
+
+with st.sidebar:
+    st.markdown(_sb_html, unsafe_allow_html=True)
+
+
+# ── Load data ─────────────────────────────────────────────────────────────────
+if st.session_state.get("_refresh_clicked"):
+    load_price_data.clear()
+    st.session_state["_refresh_clicked"] = False
+
+with st.spinner("Loading…"):
     p = load_price_data()
     s = load_slow_data()
 
 d = {**p, **s}
 
-spot    = d["spot"]
-stats24 = d["stats24"]
-atr     = d["atr"]
-emas    = d["emas"]
-vol     = d["vol"]
+spot       = d["spot"]
+stats24    = d["stats24"]
+atr        = d["atr"]
+emas       = d["emas"]
+vol        = d["vol"]
+is_weekend = d.get("is_weekend", False)
 
-# Session info — computed fresh each render (no API call)
 market_date, session_start, session_end = fetchers.active_session_date()
 session_open = d.get("session_open")
 
-# Unpack poly and load per-strike GEX early so col_vol can use it
 poly_list, found_date = d["poly"]
-_poly_strikes_tuple = tuple(sorted(int(m["strike"]) for m in poly_list if m.get("strike")))
-_spot_k = int(round((spot or 0) / 1000))
+_poly_strikes_tuple   = tuple(sorted(int(m["strike"]) for m in poly_list if m.get("strike")))
+_spot_k               = int(round((spot or 0) / 1000))
 try:
     _strike_gex: dict = load_strike_gex(_poly_strikes_tuple, market_date.isoformat(), _spot_k) if (_poly_strikes_tuple and spot) else {}
 except Exception:
     _strike_gex = {}
 
-# ── Session strip ─────────────────────────────────────────────────────────────
+_gex_expiry_label = market_date.strftime("%d %b").upper()
+
+# Session countdown
 remaining     = session_end - now_ist
 total_secs    = max(0, int(remaining.total_seconds()))
 hours, r      = divmod(total_secs, 3600)
 mins          = r // 60
 countdown_str = f"{hours}h {mins:02d}m"
 
-ss1, ss2, ss3, ss4, ss5 = st.columns(5)
-session_vwap = d.get("vwap")
-with ss1:
-    st.metric("Session Open (BTC)", f"${session_open:,.0f}" if session_open else "—")
-with ss2:
-    if session_open and spot:
-        sess_diff     = spot - session_open
-        sess_diff_pct = sess_diff / session_open * 100
-        st.metric("Move Since Open", f"${sess_diff:+,.0f}", delta=f"{sess_diff_pct:+.2f}%")
-    else:
-        st.metric("Move Since Open", "—")
-with ss3:
-    if session_vwap and spot:
-        vwap_diff = spot - session_vwap
-        vwap_lbl  = "▲ Above" if vwap_diff > 0 else "▼ Below"
-        st.metric("Session VWAP", f"${session_vwap:,.0f}", delta=f"{vwap_lbl} by ${abs(vwap_diff):,.0f}")
-    else:
-        st.metric("Session VWAP", f"${session_vwap:,.0f}" if session_vwap else "—")
-with ss4:
-    st.metric("Session Ends", session_end.strftime("%d %b %H:%M IST"))
-with ss5:
-    st.metric("Time Remaining", countdown_str)
 
-st.markdown("<hr>", unsafe_allow_html=True)
+# ── Shared header ─────────────────────────────────────────────────────────────
+def _page_header(title: str, sub: str = "") -> None:
+    hc1, hc2 = st.columns([6, 1])
+    with hc1:
+        st.markdown(f"<div class='page-title'>{title}<span class='term-cursor'></span></div>", unsafe_allow_html=True)
+        if sub:
+            st.markdown(f"<div class='page-sub'>{sub}</div>", unsafe_allow_html=True)
+    with hc2:
+        if st.button("↺ Refresh", use_container_width=True):
+            st.session_state["_refresh_clicked"] = True
+            st.rerun()
+    st.markdown("<hr>", unsafe_allow_html=True)
 
-# ── Intraday chart — TradingView ──────────────────────────────────────────────
-st.markdown("<div class='sec-hdr'>Intraday Price Action · BINANCE:BTCUSDT · 1H</div>", unsafe_allow_html=True)
-components.html("""
+
+# ── SESSION STRIP (shared across pages) ───────────────────────────────────────
+def _session_strip() -> None:
+    ss1, ss2, ss3, ss4, ss5 = st.columns(5)
+    session_vwap = d.get("vwap")
+    with ss1:
+        st.metric("Session Open (BTC)", f"${session_open:,.0f}" if session_open else "—")
+    with ss2:
+        if session_open and spot:
+            sess_diff     = spot - session_open
+            sess_diff_pct = sess_diff / session_open * 100
+            st.metric("Move Since Open", f"${sess_diff:+,.0f}", delta=f"{sess_diff_pct:+.2f}%")
+        else:
+            st.metric("Move Since Open", "—")
+    with ss3:
+        if session_vwap and spot:
+            vwap_diff = spot - session_vwap
+            vwap_lbl  = "▲ Above" if vwap_diff > 0 else "▼ Below"
+            st.metric("Session VWAP", f"${session_vwap:,.0f}", delta=f"{vwap_lbl} by ${abs(vwap_diff):,.0f}")
+        else:
+            st.metric("Session VWAP", f"${session_vwap:,.0f}" if session_vwap else "—")
+    with ss4:
+        st.metric("Session Ends", session_end.strftime("%d %b %H:%M IST"))
+    with ss5:
+        st.metric("Time Remaining", countdown_str)
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: DASHBOARD
+# ══════════════════════════════════════════════════════════════════════════════
+if page == "Dashboard":
+    _page_header(
+        "BTC Bonding Dashboard",
+        f"Session {session_start.strftime('%d %b %H:%M')} → {session_end.strftime('%d %b %H:%M')} IST  ·  Resolves {market_date.strftime('%d %b %Y')}",
+    )
+    _session_strip()
+
+    # ── Price row ─────────────────────────────────────────────────────────────
+    mc = st.columns(6)
+    vol_1m = vol.get("1m") if vol else None
+    with mc[0]:
+        st.metric("BTC Spot", f"${spot:,.0f}" if spot else "—",
+                  delta=f"{stats24.get('change_pct', 0):+.2f}%" if stats24 else None)
+    with mc[1]:
+        st.metric("24h High", f"${stats24.get('high', 0):,.0f}" if stats24 else "—")
+    with mc[2]:
+        st.metric("24h Low",  f"${stats24.get('low', 0):,.0f}"  if stats24 else "—")
+    with mc[3]:
+        st.metric("ATR (14d)", f"${atr:,.0f}" if atr else "—")
+    with mc[4]:
+        st.metric("Avg H-L % (1M)", f"{vol_1m['avg_hl_pct']:.2f}%" if vol_1m else "—")
+    with mc[5]:
+        st.metric("Avg H-L $ (1M)", f"${vol_1m['avg_hl_usd']:,.0f}" if vol_1m else "—")
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── Summary cards ─────────────────────────────────────────────────────────
+    dc1, dc2, dc3 = st.columns(3)
+
+    with dc1:
+        st.markdown("<div class='sec-hdr'>Gamma & Vol</div>", unsafe_allow_html=True)
+        _gex = d.get("gex_all") or {}
+        if _gex:
+            net_m  = _gex.get("net_gex_bn", 0) * 1000
+            regime = _gex.get("regime", "positive")
+            gc     = "green" if regime == "positive" else "red"
+            gl     = "Positive Gamma" if regime == "positive" else "Negative Gamma"
+            st.markdown(
+                f"<div class='card-lg'><div class='card-lbl'>Net GEX · {_gex_expiry_label} Expiry</div>"
+                f"<div class='card-num'>${net_m:+,.0f}<span style='font-size:0.75rem;color:var(--muted)'>M</span></div>"
+                f"<span class='{gc}' style='font-size:0.75rem'>{gl}</span></div>",
+                unsafe_allow_html=True,
+            )
+        dvol = d.get("dvol")
+        if dvol:
+            dc = "green" if dvol < 50 else "yellow" if dvol < 80 else "red"
+            dl = "Low" if dvol < 50 else "Moderate" if dvol < 80 else "High"
+            st.markdown(
+                f"<div class='card-lg'><div class='card-lbl'>DVOL (30d IV)</div>"
+                f"<div class='card-num'>{dvol:.1f}</div>"
+                f"<span class='{dc}' style='font-size:0.75rem'>{dl}</span></div>",
+                unsafe_allow_html=True,
+            )
+        rv = d.get("rv")
+        if rv:
+            rv7, rv30 = rv["rv7"], rv["rv30"]
+            rc = "red" if rv7 > rv30 else "green"
+            rl = "Expanding" if rv7 > rv30 else "Contracting"
+            st.markdown(
+                f"<div class='card'><span class='muted'>Realised Vol</span><br>"
+                f"<b>7d {rv7:.1f}%</b>&nbsp;&nbsp;<span class='muted'>30d</span> {rv30:.1f}%"
+                f"&nbsp;&nbsp;<span class='{rc}' style='font-size:0.73rem'>{rl}</span></div>",
+                unsafe_allow_html=True,
+            )
+        skew = d.get("skew")
+        if skew:
+            rr = skew["rr"]
+            sc = "green" if skew["regime"] == "bullish" else "red" if skew["regime"] == "bearish" else "yellow"
+            sl = "Bullish skew" if skew["regime"] == "bullish" else "Bearish skew" if skew["regime"] == "bearish" else "Neutral"
+            st.markdown(
+                f"<div class='card'><span class='muted'>25Δ Risk Reversal</span>&nbsp;&nbsp;"
+                f"<b>{rr:+.2f}</b>&nbsp;&nbsp;<span class='{sc}'>{sl}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+    with dc2:
+        st.markdown("<div class='sec-hdr'>Sentiment & Flows</div>", unsafe_allow_html=True)
+        fg = d.get("fear_greed")
+        if fg:
+            val   = fg["value"]
+            label = fg["classification"]
+            fc    = "red" if val <= 25 else "yellow" if val <= 45 else "muted" if val <= 55 else "green"
+            filled = round(val / 10)
+            bar    = "█" * filled + "░" * (10 - filled)
+            st.markdown(
+                f"<div class='card-lg'><div class='card-lbl'>Fear & Greed</div>"
+                f"<div class='card-num' style='font-size:1.2rem'>{val} <span style='font-size:0.75rem' class='{fc}'>{label}</span></div>"
+                f"<div style='letter-spacing:2px;font-size:0.8rem;color:#3D5066;margin-top:4px'>{bar}</div></div>",
+                unsafe_allow_html=True,
+            )
+        etf = d.get("etf_flows")
+        if etf:
+            ec = "green" if etf["today"] > 0 else "red"
+            ea = "▲" if etf["today"] > 0 else "▼"
+            st.markdown(
+                f"<div class='card-lg'><div class='card-lbl'>BTC ETF Net Flow</div>"
+                f"<div class='card-num'><span class='{ec}'>{ea} ${etf['today']:+,.1f}<span style='font-size:0.75rem;color:var(--muted)'>M</span></span></div>"
+                f"<span class='muted' style='font-size:0.73rem'>Today</span></div>",
+                unsafe_allow_html=True,
+            )
+        fund = d.get("funding")
+        if fund:
+            rate = fund.get("rate_pct", 0)
+            fc2 = "green" if rate > 0 else "red"
+            st.markdown(
+                f"<div class='card'><span class='muted'>Funding Rate</span>&nbsp;&nbsp;"
+                f"<span class='{fc2}'><b>{rate:+.4f}%</b></span></div>",
+                unsafe_allow_html=True,
+            )
+        oi = d.get("oi")
+        if oi:
+            oi_str = f"{oi:,.0f} BTC"
+            if spot:
+                oi_str = f"{oi:,.0f} BTC (${oi*spot/1e9:.2f}B)"
+            st.markdown(
+                f"<div class='card'><span class='muted'>Open Interest</span>&nbsp;&nbsp;<b>{oi_str}</b></div>",
+                unsafe_allow_html=True,
+            )
+
+    with dc3:
+        st.markdown("<div class='sec-hdr'>Bonding Opportunities</div>", unsafe_allow_html=True)
+        if found_date and found_date != market_date:
+            st.markdown(
+                f"<div class='news-card' style='border-left-color:#E8B000'>"
+                f"<span class='yellow'>⚠ Showing {found_date.strftime('%d %b')} markets</span></div>",
+                unsafe_allow_html=True,
+            )
+        bonds_found = False
+        if poly_list and spot:
+            for m in poly_list:
+                yes_c = (m["yes_price"] * 100) if m.get("yes_price") is not None else 0
+                no_c  = (m["no_price"]  * 100) if m.get("no_price")  is not None else 0
+                diff  = (spot - m["strike"]) if m.get("strike") else None
+                if 99 < yes_c < 99.9:
+                    bonds_found = True
+                    st.markdown(
+                        f"<div class='card-lg' style='border-left:2px solid var(--green)'>"
+                        f"<div class='card-lbl'>★ YES BOND</div>"
+                        f"<div style='font-size:1rem;font-weight:700;color:var(--green)'>${m['strike']:,.0f}</div>"
+                        f"<span class='muted' style='font-size:0.73rem'>Entry {yes_c:.1f}¢"
+                        f"{f'  ·  Cushion ${diff:+,.0f}' if diff is not None else ''}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                elif 99 < no_c < 99.9:
+                    bonds_found = True
+                    st.markdown(
+                        f"<div class='card-lg' style='border-left:2px solid var(--blue)'>"
+                        f"<div class='card-lbl'>★ NO BOND</div>"
+                        f"<div style='font-size:1rem;font-weight:700;color:var(--blue)'>${m['strike']:,.0f}</div>"
+                        f"<span class='muted' style='font-size:0.73rem'>Entry {no_c:.1f}¢"
+                        f"{f'  ·  Cushion ${abs(diff):+,.0f}' if diff is not None else ''}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+        if not bonds_found:
+            st.markdown(
+                "<div class='card muted' style='padding:14px'>No YES/NO bonds in the 99–99.9¢ range right now.</div>",
+                unsafe_allow_html=True,
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: PRICE CHART
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Price Chart":
+    _page_header("Price Chart", "BINANCE:BTCUSDT · 1H Candles · Asia/Kolkata")
+    _session_strip()
+
+    components.html("""
 <!DOCTYPE html>
 <html>
 <head><style>
@@ -347,444 +693,118 @@ components.html("""
     "toolbar_bg":          "#0A1018",
     "withdateranges":      true,
     "range":               "1D",
-    "hide_side_toolbar":   true,
+    "hide_side_toolbar":   false,
     "allow_symbol_change": false,
     "hide_volume":         false,
     "save_image":          false,
     "enable_publishing":   false,
-    "studies":             [],
+    "studies":             ["MAExp@tv-basicstudies", "RSI@tv-basicstudies"],
     "overrides": {
-      "paneProperties.background":            "#060A0F",
-      "paneProperties.backgroundType":        "solid",
+      "paneProperties.background":               "#060A0F",
+      "paneProperties.backgroundType":           "solid",
       "paneProperties.vertGridProperties.color": "rgba(15,26,40,0.8)",
       "paneProperties.horzGridProperties.color": "rgba(15,26,40,0.8)",
-      "scalesProperties.textColor":           "#3D5066",
-      "scalesProperties.backgroundColor":    "#060A0F",
-      "candleStyle.upColor":                  "#00D4A8",
-      "candleStyle.downColor":                "#FF3D54",
-      "candleStyle.borderUpColor":            "#00D4A8",
-      "candleStyle.borderDownColor":          "#FF3D54",
-      "candleStyle.wickUpColor":              "#00D4A8",
-      "candleStyle.wickDownColor":            "#FF3D54"
+      "scalesProperties.textColor":              "#3D5066",
+      "scalesProperties.backgroundColor":        "#060A0F",
+      "candleStyle.upColor":                     "#00D4A8",
+      "candleStyle.downColor":                   "#FF3D54",
+      "candleStyle.borderUpColor":               "#00D4A8",
+      "candleStyle.borderDownColor":             "#FF3D54",
+      "candleStyle.wickUpColor":                 "#00D4A8",
+      "candleStyle.wickDownColor":               "#FF3D54"
     }
   });
   </script>
 </body>
 </html>
-""", height=460)
-st.markdown("<hr>", unsafe_allow_html=True)
-
-# ── Row 1: Key price metrics ──────────────────────────────────────────────────
-mc = st.columns(6)
-with mc[0]:
-    st.metric(
-        "BTC Spot",
-        f"${spot:,.0f}" if spot else "—",
-        delta=f"{stats24.get('change_pct', 0):+.2f}%" if stats24 else None,
-    )
-with mc[1]:
-    st.metric("24h High", f"${stats24.get('high', 0):,.0f}" if stats24 else "—")
-with mc[2]:
-    st.metric("24h Low",  f"${stats24.get('low', 0):,.0f}"  if stats24 else "—")
-with mc[3]:
-    st.metric("ATR (14d)", f"${atr:,.0f}" if atr else "—")
-vol_1m = vol.get("1m") if vol else None
-with mc[4]:
-    st.metric("Avg H-L % (1M)", f"{vol_1m['avg_hl_pct']:.2f}%" if vol_1m else "—")
-with mc[5]:
-    st.metric("Avg H-L $ (1M)", f"${vol_1m['avg_hl_usd']:,.0f}" if vol_1m else "—")
-
-st.markdown("<hr>", unsafe_allow_html=True)
+""", height=600)
 
 
-# ── Row 2: Three columns ──────────────────────────────────────────────────────
-col_trend, col_verdict, col_vol = st.columns([1, 1.1, 1.2], gap="medium")
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: GEX
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "GEX":
+    _page_header("Gamma Exposure", f"Deribit · {_gex_expiry_label} Expiry · Session-matched options")
 
-
-# ── COLUMN 1 · Trend Analysis ─────────────────────────────────────────────────
-with col_trend:
-    st.markdown("<div class='sec-hdr'>Trend Analysis · EMA</div>", unsafe_allow_html=True)
-
-    if emas:
-        for period, val in emas.items():
-            if spot:
-                diff_pct = (spot - val) / val * 100
-                color = "green" if diff_pct > 0 else "red"
-                arrow = "▲" if diff_pct > 0 else "▼"
-                diff_str = f"&nbsp;&nbsp;<span class='{color}'>{arrow} {diff_pct:+.2f}%</span>"
-            else:
-                diff_str = ""
-            st.markdown(
-                f"<div class='card'>"
-                f"<span class='muted'>EMA {period}</span>&nbsp;&nbsp;"
-                f"<b>${val:,.0f}</b>{diff_str}"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown("<div class='card muted'>EMA data unavailable</div>", unsafe_allow_html=True)
-
-    st.markdown("<br><div class='sec-hdr'>Futures Metrics</div>", unsafe_allow_html=True)
-
-    funding = d["funding"]
-    if funding:
-        rate = funding.get("rate_pct", 0)
-        color = "green" if rate > 0 else "red"
-        next_ts = funding.get("next_funding")
-        next_str = next_ts.strftime("%H:%M UTC") if next_ts else ""
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>Funding Rate</span>&nbsp;&nbsp;"
-            f"<span class='{color}'><b>{rate:+.4f}%</b></span>"
-            f"<br><span class='muted' style='font-size:0.75rem'>Next: {next_str}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    # ── Funding history ───────────────────────────────────────────────────────
-    fh = d.get("funding_history") or []
-    if fh:
-        dots = ""
-        for p in reversed(fh):   # oldest → newest left to right
-            r = p["rate_pct"]
-            c = "#00D4A8" if r > 0 else "#FF3D54"
-            dots += f"<span style='color:{c};font-size:0.85rem'>{'▲' if r > 0 else '▼'}</span>"
-            dots += f"<span style='color:{c};font-size:0.7rem'>{r:+.3f}%&nbsp;&nbsp;</span>"
-        pos = sum(1 for p in fh if p["rate_pct"] > 0)
-        trend_lbl = "Persistently long" if pos >= 6 else "Mostly short" if pos <= 2 else "Mixed"
-        trend_col = "red" if pos >= 6 else "green" if pos <= 2 else "yellow"
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>Funding History (last {len(fh)})</span><br>"
-            f"<div style='margin:4px 0;line-height:1.8'>{dots}</div>"
-            f"<span class='{trend_col}' style='font-size:0.73rem'>{trend_lbl}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    oi = d["oi"]
-    oih = d.get("oi_history") or []
-    if oi:
-        oi_str = f"{oi:,.0f} BTC"
-        if spot:
-            oi_usd = oi * spot
-            oi_str = f"{oi:,.0f} BTC (${oi_usd/1e9:.2f}B)"
-
-        # Build history with delta numbers and trend label
-        oi_dots = ""
-        if len(oih) >= 2:
-            for i in range(1, len(oih)):
-                delta_btc = oih[i]["oi"] - oih[i - 1]["oi"]
-                delta_m   = delta_btc * (spot or 0) / 1e6
-                c = "#00D4A8" if delta_btc > 0 else "#FF3D54"
-                oi_dots += (
-                    f"<span style='color:{c};font-size:0.82rem'>{'▲' if delta_btc > 0 else '▼'}</span>"
-                    f"<span style='color:{c};font-size:0.68rem'>${delta_m:+,.0f}M&nbsp;&nbsp;</span>"
-                )
-            rising = sum(1 for i in range(1, len(oih)) if oih[i]["oi"] > oih[i-1]["oi"])
-            total  = len(oih) - 1
-            if rising >= total * 0.7:
-                oi_trend_lbl, oi_trend_col = "Building", "green"
-            elif rising <= total * 0.3:
-                oi_trend_lbl, oi_trend_col = "Unwinding", "red"
-            else:
-                oi_trend_lbl, oi_trend_col = "Mixed", "yellow"
-            oi_history_html = (
-                f"<br><div style='margin:3px 0;line-height:1.8'>{oi_dots}</div>"
-                f"<span class='{oi_trend_col}' style='font-size:0.73rem'>{oi_trend_lbl}</span>"
-            )
-        else:
-            oi_history_html = ""
-
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>Open Interest</span>&nbsp;&nbsp;<b>{oi_str}</b>"
-            f"{oi_history_html}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<br><div class='sec-hdr'>BTC ETF Net Flows</div>", unsafe_allow_html=True)
-
-    etf_flows = d.get("etf_flows")
-    if etf_flows:
-        rows = [
-            ("Today",      etf_flows["today"]),
-            ("Last Week",  etf_flows["last_week"]),
-            ("Last Month", etf_flows["last_month"]),
-            ("3 Months",   etf_flows["three_months"]),
-        ]
-        for label, val in rows:
-            color = "green" if val > 0 else "red"
-            arrow = "▲" if val > 0 else "▼"
-            is_today = label == "Today"
-            weight = "font-size:1rem;" if is_today else "font-size:0.85rem;"
-            st.markdown(
-                f"<div class='card' style='padding:7px 14px;display:flex;"
-                f"justify-content:space-between;align-items:center'>"
-                f"<span class='muted'>{label}</span>"
-                f"<span class='{color}' style='{weight}'><b>{arrow} ${val:,.1f}M</b></span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown("<div class='card muted'>ETF flow data unavailable</div>", unsafe_allow_html=True)
-
-
-# ── COLUMN 2 · Trade Verdict ──────────────────────────────────────────────────
-with col_verdict:
-    st.markdown("<div class='sec-hdr'>Trade Verdict · High Impact Events Today</div>", unsafe_allow_html=True)
-
-    ff = d["ff"]
-    ff_error = d.get("ff_error", False)
-
-    if ff_error:
-        st.markdown(
-            "<div class='news-card high'><span class='yellow'>⚠ FOREX FACTORY RATE-LIMITED — "
-            "auto-retry in ~5 min</span></div>",
-            unsafe_allow_html=True,
-        )
-    elif ff:
-        FLAGS = {"USD": "🇺🇸", "EUR": "🇪🇺", "GBP": "🇬🇧", "JPY": "🇯🇵",
-                 "CAD": "🇨🇦", "AUD": "🇦🇺", "NZD": "🇳🇿", "CHF": "🇨🇭"}
-        for e in ff:
-            flag = FLAGS.get(e["country"], "🌐")
-            actual_str = f" &nbsp;·&nbsp; <b>Actual: {e['actual']}</b>" if e.get("actual") else ""
-            st.markdown(
-                f"<div class='news-card high'>"
-                f"<b>{e['title']}</b><br>"
-                f"<span class='muted'>{flag} {e['country']} &nbsp;·&nbsp; "
-                f"{e['time_ist']} ({e['time_utc']})"
-                f" &nbsp;·&nbsp; F: {e['forecast']} &nbsp;·&nbsp; P: {e['previous']}"
-                f"{actual_str}</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown(
-            "<div class='news-card info'><span class='muted'>NO HIGH-IMPACT MACRO EVENTS TODAY</span></div>",
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<br><div class='sec-hdr'>BTC News</div>", unsafe_allow_html=True)
-    news = d["news"]
-    if news:
-        for item in news:
-            pub = item["published_on"].strftime("%H:%M") if "published_on" in item else ""
-            st.markdown(
-                f"<div class='news-card info'>"
-                f"<a href='{item['url']}' target='_blank' "
-                f"style='color:#4E9FD4;text-decoration:none;font-weight:600'>{item['title']}</a>"
-                f"<br><span class='muted'>{item['source']} · {pub} UTC</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown("<div class='news-card muted'>News unavailable</div>", unsafe_allow_html=True)
-
-
-# ── COLUMN 3 · Volatility Details ────────────────────────────────────────────
-with col_vol:
-    st.markdown("<div class='sec-hdr'>Live Volatility Signals</div>", unsafe_allow_html=True)
-
-    # ── Fear & Greed ──────────────────────────────────────────────────────────
-    fg = d.get("fear_greed")
-    if fg:
-        val   = fg["value"]
-        label = fg["classification"]
-        if val <= 25:
-            fg_color = "red"
-        elif val <= 45:
-            fg_color = "yellow"
-        elif val <= 55:
-            fg_color = "muted"
-        else:
-            fg_color = "green"
-        filled = round(val / 10)
-        bar    = "█" * filled + "░" * (10 - filled)
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>Fear & Greed</span>&nbsp;&nbsp;"
-            f"<span class='{fg_color}'><b>{val} — {label}</b></span><br>"
-            f"<span style='letter-spacing:2px;font-size:0.8rem;color:#3D5066'>{bar}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    # ── Realised vol ──────────────────────────────────────────────────────────
-    rv = d.get("rv")
-    if rv:
-        rv7, rv30     = rv["rv7"], rv["rv30"]
-        expanding     = rv7 > rv30
-        rv_color      = "red" if expanding else "green"
-        rv_arrow      = "▲" if expanding else "▼"
-        rv_label      = "Expanding" if expanding else "Contracting"
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>Realised Vol</span><br>"
-            f"<span class='muted' style='font-size:0.75rem'>7d</span>&nbsp;"
-            f"<b>{rv7:.1f}%</b>"
-            f"&nbsp;&nbsp;<span class='muted' style='font-size:0.75rem'>30d</span>&nbsp;"
-            f"<b>{rv30:.1f}%</b>"
-            f"<br><span class='{rv_color}' style='font-size:0.75rem'>"
-            f"{rv_arrow} Vol {rv_label} (7d {'>' if expanding else '<'} 30d)</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    # ── Deribit DVOL ──────────────────────────────────────────────────────────
-    dvol = d.get("dvol")
-    if dvol:
-        if dvol < 50:
-            dvol_color, dvol_label = "green",  "Low"
-        elif dvol < 80:
-            dvol_color, dvol_label = "yellow", "Moderate"
-        else:
-            dvol_color, dvol_label = "red",    "High"
-        daily_move_pct = dvol / (365 ** 0.5)
-        daily_move_usd = f"&nbsp;·&nbsp; ${daily_move_pct / 100 * spot:,.0f}" if spot else ""
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>Deribit DVOL (30d IV)</span>"
-            f"&nbsp;&nbsp;<b>{dvol:.1f}</b>"
-            f"&nbsp;&nbsp;<span class='{dvol_color}'>{dvol_label}</span><br>"
-            f"<span class='muted' style='font-size:0.75rem'>Expected daily move: "
-            f"<b class='blue'>{daily_move_pct:.2f}%</b>{daily_move_usd}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    # ── Options Skew ─────────────────────────────────────────────────────────
-    skew = d.get("skew")
-    if skew:
-        rr = skew["rr"]
-        if skew["regime"] == "bullish":
-            sk_color, sk_label = "green", "Bullish skew · calls pricier"
-        elif skew["regime"] == "bearish":
-            sk_color, sk_label = "red",   "Bearish skew · puts pricier"
-        else:
-            sk_color, sk_label = "yellow", "Neutral skew"
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>25Δ Risk Reversal (7–30 DTE)</span>"
-            f"&nbsp;&nbsp;<b>{rr:+.2f}</b>"
-            f"&nbsp;&nbsp;<span class='{sk_color}'>{sk_label}</span><br>"
-            f"<span class='muted' style='font-size:0.75rem'>"
-            f"Call 25Δ IV <b>{skew['call_25d_iv']:.1f}%</b>"
-            f"&nbsp;&nbsp;Put 25Δ IV <b>{skew['put_25d_iv']:.1f}%</b>"
-            f"</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    # ── GEX ── use all-expirations book summary (same source as chart) ──────────
     _gex_card = d.get("gex_all") or {}
+
+    # ── Aggregate cards ───────────────────────────────────────────────────────
     if _gex_card:
-        net_m   = _gex_card.get("net_gex_bn",  0) * 1000   # $B → $M
+        net_m   = _gex_card.get("net_gex_bn",  0) * 1000
         calls_m = _gex_card.get("call_gex_bn", 0) * 1000
         puts_m  = _gex_card.get("put_gex_bn",  0) * 1000
         regime  = _gex_card.get("regime", "positive")
-        if regime == "positive":
-            gex_color, gex_label, gex_note = "green", "Positive Gamma", "Stabilising · range-bound moves expected"
-        else:
-            gex_color, gex_label, gex_note = "red",   "Negative Gamma", "Destabilising · trending/volatile moves expected"
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>Net GEX (Deribit · All Expirations)</span>"
-            f"&nbsp;&nbsp;<b>${net_m:+,.0f}M</b>"
-            f"&nbsp;&nbsp;<span class='{gex_color}'>{gex_label}</span><br>"
-            f"<span class='muted' style='font-size:0.75rem'>{gex_note}</span><br>"
-            f"<span class='muted' style='font-size:0.75rem'>"
-            f"Calls <span class='green'>${calls_m:,.0f}M</span>"
-            f"&nbsp;&nbsp;Puts <span class='red'>${puts_m:,.0f}M</span>"
-            f"</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+        flip    = _gex_card.get("flip_level")
+        gc      = "green" if regime == "positive" else "red"
+        gl      = "Positive Gamma" if regime == "positive" else "Negative Gamma"
+        gn      = "Stabilising · range-bound moves expected" if regime == "positive" else "Destabilising · trending/volatile moves expected"
 
-    if not fg and not rv and not dvol and not _gex_card:
-        st.markdown("<div class='card muted'>Live signals unavailable</div>", unsafe_allow_html=True)
-
-    st.markdown("<br><div class='sec-hdr'>Historical Volatility</div>", unsafe_allow_html=True)
-
-    def _vol_table(m: dict, label: str) -> None:
-        st.markdown(f"<div class='sec-hdr' style='margin-top:6px'>{label}</div>", unsafe_allow_html=True)
-        rows = [
-            ("Avg volatility % (open/close)", f"{m['avg_oc_pct']:.2f}%"),
-            ("Avg volatility % (high/low)",   f"{m['avg_hl_pct']:.2f}%"),
-            ("Avg volatility USD (open/close)", f"${m['avg_oc_usd']:,.0f}"),
-            ("Avg volatility USD (high/low)",   f"${m['avg_hl_usd']:,.0f}"),
-            (f"Max % move in a day", f"{m['max_hl_pct']:.2f}% <span class='muted' style='font-size:0.73rem'>({m['max_hl_pct_date']})</span>"),
-            (f"Max USD move in a day", f"${m['max_hl_usd']:,.0f} <span class='muted' style='font-size:0.73rem'>({m['max_hl_usd_date']})</span>"),
-        ]
-        for label_row, value in rows:
+        g1, g2, g3, g4 = st.columns(4)
+        with g1:
             st.markdown(
-                f"<div class='card' style='padding:7px 14px;display:flex;justify-content:space-between;align-items:center'>"
-                f"<span class='muted'>{label_row}</span>"
-                f"<b>{value}</b>"
-                f"</div>",
+                f"<div class='card-lg'><div class='card-lbl'>Net GEX</div>"
+                f"<div class='card-num'>${net_m:+,.0f}<span style='font-size:0.7rem;color:var(--muted)'>M</span></div>"
+                f"<span class='{gc}' style='font-size:0.75rem'>{gl}</span><br>"
+                f"<span class='muted' style='font-size:0.7rem'>{gn}</span></div>",
                 unsafe_allow_html=True,
             )
-
-    if vol:
-        if vol.get("1m"):
-            _vol_table(vol["1m"], "1 Month")
-        if vol.get("6m"):
-            _vol_table(vol["6m"], "6 Months")
+        with g2:
+            st.markdown(
+                f"<div class='card-lg'><div class='card-lbl'>Call GEX</div>"
+                f"<div class='card-num' style='color:var(--green)'>${calls_m:,.0f}<span style='font-size:0.7rem;color:var(--muted)'>M</span></div></div>",
+                unsafe_allow_html=True,
+            )
+        with g3:
+            st.markdown(
+                f"<div class='card-lg'><div class='card-lbl'>Put GEX</div>"
+                f"<div class='card-num' style='color:var(--red)'>${puts_m:,.0f}<span style='font-size:0.7rem;color:var(--muted)'>M</span></div></div>",
+                unsafe_allow_html=True,
+            )
+        with g4:
+            if flip:
+                flip_dist = abs(flip - (spot or flip)) / (spot or flip) * 100 if spot else 0
+                st.markdown(
+                    f"<div class='card-lg'><div class='card-lbl'>Gamma Flip</div>"
+                    f"<div class='card-num'>${flip:,.0f}</div>"
+                    f"<span class='muted' style='font-size:0.73rem'>Distance: {flip_dist:.1f}%</span></div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    "<div class='card-lg'><div class='card-lbl'>Gamma Flip</div>"
+                    "<div class='muted'>Not detected</div></div>",
+                    unsafe_allow_html=True,
+                )
     else:
-        st.markdown(
-            "<div class='card muted'>Local CSVs not found.<br>"
-            "Place BTCUSD CSVs in project root.</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown("<div class='card muted'>GEX data unavailable</div>", unsafe_allow_html=True)
 
-    if atr and spot:
-        st.markdown("<br>", unsafe_allow_html=True)
-        atr_pct = atr / spot * 100
-        st.markdown(
-            f"<div class='card'>"
-            f"<span class='muted'>ATR as % of spot</span>&nbsp;&nbsp;"
-            f"<b>{atr_pct:.2f}%</b>"
-            f"<br><span class='muted' style='font-size:0.75rem'>"
-            f"Expected 1-day move: ${atr:,.0f} (1×ATR) — ${atr*1.5:,.0f} (1.5×ATR)"
-            f"</span></div>",
-            unsafe_allow_html=True,
-        )
+    # ── GEX by Strike chart ───────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(f"<div class='sec-hdr'>GEX Distribution by Strike · {_gex_expiry_label} Expiry · Polymarket Strikes</div>", unsafe_allow_html=True)
 
+    _gex_all_strikes = (_gex_card or {}).get("gex_by_strike") or {}
+    _deribit_keys     = sorted(_gex_all_strikes.keys())
+    _gex_chart: dict[float, float] = {}
+    for _ps in sorted(float(m["strike"]) for m in poly_list if m.get("strike")):
+        if _deribit_keys:
+            _closest = min(_deribit_keys, key=lambda s: abs(s - _ps))
+            if abs(_closest - _ps) < 2000:
+                _gex_chart[_ps] = _gex_all_strikes[_closest]
 
+    if not _gex_chart and _strike_gex:
+        _gex_chart = {s: v["net_gex_m"] for s, v in _strike_gex.items()
+                      if abs(v["net_gex_m"]) > 0.5}
 
-# ── GEX by Strike chart ───────────────────────────────────────────────────────
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown("<div class='sec-hdr'>GEX Profile by Strike · All Expirations</div>", unsafe_allow_html=True)
+    if _gex_chart and spot:
+        _strikes  = sorted(_gex_chart.keys())
+        _labels   = json.dumps([f"${int(s):,}" for s in _strikes])
+        _values   = json.dumps([round(_gex_chart[s], 2) for s in _strikes])
+        _colors   = json.dumps(["rgba(0,212,168,0.75)" if _gex_chart[s] >= 0 else "rgba(255,61,84,0.75)" for s in _strikes])
+        _borders  = json.dumps(["#00D4A8" if _gex_chart[s] >= 0 else "#FF3D54" for s in _strikes])
+        _spot_idx = int(min(range(len(_strikes)), key=lambda i: abs(_strikes[i] - spot)))
+        _spot_lbl = f"Spot ${spot:,.0f}"
 
-# Chart uses ALL-expirations book summary (like Laevitas) mapped to Polymarket strikes
-_gex_all_strikes = (d.get("gex_all") or {}).get("gex_by_strike") or {}
-_deribit_keys     = sorted(_gex_all_strikes.keys())
-_gex_chart: dict[float, float] = {}
-for _ps in sorted(float(m["strike"]) for m in poly_list if m.get("strike")):
-    if _deribit_keys:
-        _closest = min(_deribit_keys, key=lambda s: abs(s - _ps))
-        if abs(_closest - _ps) < 2000:
-            _gex_chart[_ps] = _gex_all_strikes[_closest]
-
-# Fall back to today-only ticker data if book summary returned nothing
-if not _gex_chart and _strike_gex:
-    _gex_chart = {s: v["net_gex_m"] for s, v in _strike_gex.items()
-                  if abs(v["net_gex_m"]) > 0.5}
-
-if _gex_chart and spot:
-    _strikes  = sorted(_gex_chart.keys())
-    _labels   = json.dumps([f"${int(s):,}" for s in _strikes])
-    _values   = json.dumps([round(_gex_chart[s], 2) for s in _strikes])
-    _colors   = json.dumps(["rgba(0,212,168,0.75)" if _gex_chart[s] >= 0
-                             else "rgba(255,61,84,0.75)" for s in _strikes])
-    _borders  = json.dumps(["#00D4A8" if _gex_chart[s] >= 0
-                             else "#FF3D54" for s in _strikes])
-    # Index of strike closest to spot (for annotation)
-    _spot_idx = int(min(range(len(_strikes)), key=lambda i: abs(_strikes[i] - spot)))
-    _spot_lbl = f"Spot ${spot:,.0f}"
-
-    components.html(f"""<!DOCTYPE html>
+        components.html(f"""<!DOCTYPE html>
 <html><head><style>
   *{{margin:0;padding:0;box-sizing:border-box}}
   html,body{{background:#060A0F;width:100%;height:100%;overflow:hidden}}
@@ -815,34 +835,21 @@ new Chart(document.getElementById('gex'), {{
     plugins: {{
       legend: {{display: false}},
       tooltip: {{
-        backgroundColor: '#0A1018',
-        borderColor: '#141E2A',
-        borderWidth: 1,
-        titleColor: '#A8BDD0',
-        bodyColor: '#A8BDD0',
+        backgroundColor: '#0A1018', borderColor: '#141E2A', borderWidth: 1,
+        titleColor: '#A8BDD0', bodyColor: '#A8BDD0',
         titleFont: {{family:'SF Mono,Fira Code,monospace',size:10}},
         bodyFont:  {{family:'SF Mono,Fira Code,monospace',size:10}},
-        callbacks: {{
-          label: ctx => ' ' + ctx.parsed.y.toFixed(1) + 'M GEX'
-        }}
+        callbacks: {{ label: ctx => ' ' + ctx.parsed.y.toFixed(1) + 'M GEX' }}
       }},
       annotation: {{
         annotations: {{
           spotLine: {{
-            type: 'line',
-            xMin: {_spot_idx},
-            xMax: {_spot_idx},
-            borderColor: '#E8B000',
-            borderWidth: 1.5,
-            borderDash: [4,4],
+            type: 'line', xMin: {_spot_idx}, xMax: {_spot_idx},
+            borderColor: '#E8B000', borderWidth: 1.5, borderDash: [4,4],
             label: {{
-              display: true,
-              content: '{_spot_lbl}',
-              position: 'start',
-              color: '#E8B000',
-              backgroundColor: 'transparent',
-              font: {{family:'SF Mono,Fira Code,monospace', size:9}},
-              padding: 2,
+              display: true, content: '{_spot_lbl}', position: 'start',
+              color: '#E8B000', backgroundColor: 'transparent',
+              font: {{family:'SF Mono,Fira Code,monospace', size:9}}, padding: 2,
             }}
           }}
         }}
@@ -850,78 +857,429 @@ new Chart(document.getElementById('gex'), {{
     }},
     scales: {{
       x: {{
-        ticks: {{
-          color: '#3D5066',
-          font: {{family:'SF Mono,Fira Code,monospace',size:8}},
-          maxRotation: 45,
-          autoSkip: true,
-          maxTicksLimit: 20,
-        }},
+        ticks: {{ color: '#3D5066', font: {{family:'SF Mono,Fira Code,monospace',size:8}}, maxRotation: 45, autoSkip: true, maxTicksLimit: 20 }},
         grid: {{color:'rgba(15,26,40,0.8)'}},
       }},
       y: {{
-        ticks: {{
-          color: '#3D5066',
-          font: {{family:'SF Mono,Fira Code,monospace',size:9}},
-          callback: v => '$' + v.toFixed(0) + 'M'
-        }},
+        ticks: {{ color: '#3D5066', font: {{family:'SF Mono,Fira Code,monospace',size:9}}, callback: v => '$' + v.toFixed(0) + 'M' }},
         grid: {{color:'rgba(15,26,40,0.8)'}},
       }}
     }}
   }}
 }});
 </script>
-</body></html>""", height=300)
-    _src = "all expirations" if _gex_all_strikes else "today's expiry only"
-    st.markdown(
-        f"<span class='muted' style='font-size:0.7rem'>Source: Deribit · {_src}</span>",
-        unsafe_allow_html=True,
+</body></html>""", height=400)
+        st.markdown(
+            f"<span class='muted' style='font-size:0.7rem'>Source: Deribit · {_gex_expiry_label} expiry · mapped to Polymarket strikes</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("<div class='card muted'>GEX by strike unavailable</div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: VOLATILITY
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Volatility":
+    _day_type_label = "Weekend" if is_weekend else "Weekday"
+    _page_header("Volatility", f"{_day_type_label} sessions · Historical & implied vol")
+
+    vc1, vc2 = st.columns([1.1, 1])
+
+    with vc1:
+        # ── Live vol signals ──────────────────────────────────────────────────
+        st.markdown("<div class='sec-hdr'>Live Volatility Signals</div>", unsafe_allow_html=True)
+
+        fg = d.get("fear_greed")
+        if fg:
+            val   = fg["value"]
+            label = fg["classification"]
+            fc    = "red" if val <= 25 else "yellow" if val <= 45 else "muted" if val <= 55 else "green"
+            filled = round(val / 10)
+            bar    = "█" * filled + "░" * (10 - filled)
+            st.markdown(
+                f"<div class='card'><span class='muted'>Fear & Greed</span>&nbsp;&nbsp;"
+                f"<span class='{fc}'><b>{val} — {label}</b></span><br>"
+                f"<span style='letter-spacing:2px;font-size:0.8rem;color:#3D5066'>{bar}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        rv = d.get("rv")
+        if rv:
+            rv7, rv30 = rv["rv7"], rv["rv30"]
+            rc = "red" if rv7 > rv30 else "green"
+            rl = "Expanding" if rv7 > rv30 else "Contracting"
+            st.markdown(
+                f"<div class='card'><span class='muted'>Realised Vol</span><br>"
+                f"<span class='muted' style='font-size:0.75rem'>7d</span>&nbsp;<b>{rv7:.1f}%</b>"
+                f"&nbsp;&nbsp;<span class='muted' style='font-size:0.75rem'>30d</span>&nbsp;<b>{rv30:.1f}%</b>"
+                f"<br><span class='{rc}' style='font-size:0.75rem'>{'▲' if rv7>rv30 else '▼'} Vol {rl}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        dvol = d.get("dvol")
+        if dvol:
+            dc = "green" if dvol < 50 else "yellow" if dvol < 80 else "red"
+            dl = "Low" if dvol < 50 else "Moderate" if dvol < 80 else "High"
+            dm_pct = dvol / (365 ** 0.5)
+            dm_usd = f"&nbsp;·&nbsp; ${dm_pct / 100 * spot:,.0f}" if spot else ""
+            st.markdown(
+                f"<div class='card'><span class='muted'>Deribit DVOL (30d IV)</span>"
+                f"&nbsp;&nbsp;<b>{dvol:.1f}</b>&nbsp;&nbsp;<span class='{dc}'>{dl}</span><br>"
+                f"<span class='muted' style='font-size:0.75rem'>Expected daily move: <b class='blue'>{dm_pct:.2f}%</b>{dm_usd}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        skew = d.get("skew")
+        if skew:
+            rr = skew["rr"]
+            sc = "green" if skew["regime"] == "bullish" else "red" if skew["regime"] == "bearish" else "yellow"
+            sl = "Bullish skew · calls pricier" if skew["regime"] == "bullish" else "Bearish skew · puts pricier" if skew["regime"] == "bearish" else "Neutral skew"
+            st.markdown(
+                f"<div class='card'><span class='muted'>25Δ Risk Reversal (7–30 DTE)</span>"
+                f"&nbsp;&nbsp;<b>{rr:+.2f}</b>&nbsp;&nbsp;<span class='{sc}'>{sl}</span><br>"
+                f"<span class='muted' style='font-size:0.75rem'>"
+                f"Call 25Δ IV <b>{skew['call_25d_iv']:.1f}%</b>"
+                f"&nbsp;&nbsp;Put 25Δ IV <b>{skew['put_25d_iv']:.1f}%</b></span></div>",
+                unsafe_allow_html=True,
+            )
+
+        if atr and spot:
+            atr_pct = atr / spot * 100
+            st.markdown(
+                f"<div class='card'><span class='muted'>ATR as % of spot</span>&nbsp;&nbsp;<b>{atr_pct:.2f}%</b>"
+                f"<br><span class='muted' style='font-size:0.75rem'>"
+                f"Expected 1-day move: ${atr:,.0f} (1×ATR) — ${atr*1.5:,.0f} (1.5×ATR)</span></div>",
+                unsafe_allow_html=True,
+            )
+
+    with vc2:
+        # ── Historical vol ────────────────────────────────────────────────────
+        st.markdown(
+            f"<div class='sec-hdr'>Historical Volatility "
+            f"<span style='font-size:0.75rem;color:var(--muted)'>({_day_type_label} sessions)</span></div>",
+            unsafe_allow_html=True,
+        )
+
+        def _vol_table(m: dict, label: str) -> None:
+            st.markdown(f"<div class='sec-hdr' style='margin-top:6px'>{label}</div>", unsafe_allow_html=True)
+            rows = [
+                ("Avg vol % (open/close)", f"{m['avg_oc_pct']:.2f}%"),
+                ("Avg vol % (high/low)",   f"{m['avg_hl_pct']:.2f}%"),
+                ("Avg vol $ (open/close)", f"${m['avg_oc_usd']:,.0f}"),
+                ("Avg vol $ (high/low)",   f"${m['avg_hl_usd']:,.0f}"),
+                ("Max % move in a day",    f"{m['max_hl_pct']:.2f}% <span class='muted' style='font-size:0.73rem'>({m['max_hl_pct_date']})</span>"),
+                ("Max $ move in a day",    f"${m['max_hl_usd']:,.0f} <span class='muted' style='font-size:0.73rem'>({m['max_hl_usd_date']})</span>"),
+            ]
+            for lbl_row, value in rows:
+                st.markdown(
+                    f"<div class='card' style='padding:7px 14px;display:flex;justify-content:space-between;align-items:center'>"
+                    f"<span class='muted'>{lbl_row}</span><b>{value}</b></div>",
+                    unsafe_allow_html=True,
+                )
+
+        if vol:
+            if vol.get("1m"):
+                _vol_table(vol["1m"], "1 Month")
+            if vol.get("6m"):
+                _vol_table(vol["6m"], "6 Months")
+        else:
+            st.markdown(
+                "<div class='card muted'>Local CSVs not found.<br>Place BTCUSD CSVs in project root.</div>",
+                unsafe_allow_html=True,
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: TREND
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Trend":
+    _page_header("Trend Analysis", "EMA · Funding · Open Interest · ETF Flows")
+
+    tc1, tc2 = st.columns(2)
+
+    with tc1:
+        st.markdown("<div class='sec-hdr'>EMA Structure</div>", unsafe_allow_html=True)
+        if emas:
+            for period, val in emas.items():
+                if spot:
+                    diff_pct = (spot - val) / val * 100
+                    color = "green" if diff_pct > 0 else "red"
+                    arrow = "▲" if diff_pct > 0 else "▼"
+                    diff_str = f"&nbsp;&nbsp;<span class='{color}'>{arrow} {diff_pct:+.2f}%</span>"
+                else:
+                    diff_str = ""
+                st.markdown(
+                    f"<div class='card'><span class='muted'>EMA {period}</span>&nbsp;&nbsp;"
+                    f"<b>${val:,.0f}</b>{diff_str}</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown("<div class='card muted'>EMA data unavailable</div>", unsafe_allow_html=True)
+
+        st.markdown("<br><div class='sec-hdr'>BTC ETF Net Flows</div>", unsafe_allow_html=True)
+        etf_flows = d.get("etf_flows")
+        if etf_flows:
+            for label, val in [("Today", etf_flows["today"]), ("Last Week", etf_flows["last_week"]),
+                                ("Last Month", etf_flows["last_month"]), ("3 Months", etf_flows["three_months"])]:
+                color = "green" if val > 0 else "red"
+                arrow = "▲" if val > 0 else "▼"
+                weight = "font-size:1rem;" if label == "Today" else "font-size:0.85rem;"
+                st.markdown(
+                    f"<div class='card' style='padding:7px 14px;display:flex;justify-content:space-between;align-items:center'>"
+                    f"<span class='muted'>{label}</span>"
+                    f"<span class='{color}' style='{weight}'><b>{arrow} ${val:,.1f}M</b></span></div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown("<div class='card muted'>ETF flow data unavailable</div>", unsafe_allow_html=True)
+
+    with tc2:
+        st.markdown("<div class='sec-hdr'>Futures Metrics</div>", unsafe_allow_html=True)
+
+        funding = d["funding"]
+        if funding:
+            rate    = funding.get("rate_pct", 0)
+            color   = "green" if rate > 0 else "red"
+            next_ts = funding.get("next_funding")
+            next_str = next_ts.strftime("%H:%M UTC") if next_ts else ""
+            st.markdown(
+                f"<div class='card'><span class='muted'>Funding Rate</span>&nbsp;&nbsp;"
+                f"<span class='{color}'><b>{rate:+.4f}%</b></span>"
+                f"<br><span class='muted' style='font-size:0.75rem'>Next: {next_str}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        fh = d.get("funding_history") or []
+        if fh:
+            dots = ""
+            for fp in reversed(fh):
+                r = fp["rate_pct"]
+                c = "#00D4A8" if r > 0 else "#FF3D54"
+                dots += f"<span style='color:{c};font-size:0.85rem'>{'▲' if r > 0 else '▼'}</span>"
+                dots += f"<span style='color:{c};font-size:0.7rem'>{r:+.3f}%&nbsp;&nbsp;</span>"
+            pos = sum(1 for fp in fh if fp["rate_pct"] > 0)
+            trend_lbl = "Persistently long" if pos >= 6 else "Mostly short" if pos <= 2 else "Mixed"
+            trend_col = "red" if pos >= 6 else "green" if pos <= 2 else "yellow"
+            st.markdown(
+                f"<div class='card'><span class='muted'>Funding History (last {len(fh)})</span><br>"
+                f"<div style='margin:4px 0;line-height:1.8'>{dots}</div>"
+                f"<span class='{trend_col}' style='font-size:0.73rem'>{trend_lbl}</span></div>",
+                unsafe_allow_html=True,
+            )
+
+        oi  = d["oi"]
+        oih = d.get("oi_history") or []
+        if oi:
+            oi_str = f"{oi:,.0f} BTC"
+            if spot:
+                oi_str = f"{oi:,.0f} BTC (${oi*spot/1e9:.2f}B)"
+            oi_dots = ""
+            if len(oih) >= 2:
+                for i in range(1, len(oih)):
+                    delta_btc = oih[i]["oi"] - oih[i - 1]["oi"]
+                    delta_m   = delta_btc * (spot or 0) / 1e6
+                    c = "#00D4A8" if delta_btc > 0 else "#FF3D54"
+                    oi_dots += (
+                        f"<span style='color:{c};font-size:0.82rem'>{'▲' if delta_btc > 0 else '▼'}</span>"
+                        f"<span style='color:{c};font-size:0.68rem'>${delta_m:+,.0f}M&nbsp;&nbsp;</span>"
+                    )
+                rising = sum(1 for i in range(1, len(oih)) if oih[i]["oi"] > oih[i-1]["oi"])
+                total  = len(oih) - 1
+                if rising >= total * 0.7:
+                    oi_trend_lbl, oi_trend_col = "Building", "green"
+                elif rising <= total * 0.3:
+                    oi_trend_lbl, oi_trend_col = "Unwinding", "red"
+                else:
+                    oi_trend_lbl, oi_trend_col = "Mixed", "yellow"
+                oi_history_html = (
+                    f"<br><div style='margin:3px 0;line-height:1.8'>{oi_dots}</div>"
+                    f"<span class='{oi_trend_col}' style='font-size:0.73rem'>{oi_trend_lbl}</span>"
+                )
+            else:
+                oi_history_html = ""
+            st.markdown(
+                f"<div class='card'><span class='muted'>Open Interest</span>&nbsp;&nbsp;<b>{oi_str}</b>"
+                f"{oi_history_html}</div>",
+                unsafe_allow_html=True,
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: NEWS & MACRO
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "News & Macro":
+    _page_header("News & Macro", "High-impact events · BTC headlines")
+
+    nc1, nc2 = st.columns(2)
+
+    with nc1:
+        st.markdown("<div class='sec-hdr'>High Impact Macro Events Today</div>", unsafe_allow_html=True)
+        ff       = d["ff"]
+        ff_error = d.get("ff_error", False)
+        if ff_error:
+            st.markdown(
+                "<div class='news-card high'><span class='yellow'>⚠ FOREX FACTORY RATE-LIMITED — auto-retry in ~5 min</span></div>",
+                unsafe_allow_html=True,
+            )
+        elif ff:
+            FLAGS = {"USD": "🇺🇸", "EUR": "🇪🇺", "GBP": "🇬🇧", "JPY": "🇯🇵",
+                     "CAD": "🇨🇦", "AUD": "🇦🇺", "NZD": "🇳🇿", "CHF": "🇨🇭"}
+            for e in ff:
+                flag = FLAGS.get(e["country"], "🌐")
+                actual_str = f" &nbsp;·&nbsp; <b>Actual: {e['actual']}</b>" if e.get("actual") else ""
+                st.markdown(
+                    f"<div class='news-card high'><b>{e['title']}</b><br>"
+                    f"<span class='muted'>{flag} {e['country']} &nbsp;·&nbsp; "
+                    f"{e['time_ist']} ({e['time_utc']})"
+                    f" &nbsp;·&nbsp; F: {e['forecast']} &nbsp;·&nbsp; P: {e['previous']}"
+                    f"{actual_str}</span></div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                "<div class='news-card info'><span class='muted'>NO HIGH-IMPACT MACRO EVENTS TODAY</span></div>",
+                unsafe_allow_html=True,
+            )
+
+    with nc2:
+        st.markdown("<div class='sec-hdr'>BTC News</div>", unsafe_allow_html=True)
+        news = d["news"]
+        if news:
+            for item in news:
+                pub = item["published_on"].strftime("%H:%M") if "published_on" in item else ""
+                st.markdown(
+                    f"<div class='news-card info'>"
+                    f"<a href='{item['url']}' target='_blank' "
+                    f"style='color:#4E9FD4;text-decoration:none;font-weight:600'>{item['title']}</a>"
+                    f"<br><span class='muted'>{item['source']} · {pub} UTC</span></div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown("<div class='news-card muted'>News unavailable</div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: POLYMARKET
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Polymarket":
+    _page_header(
+        "Polymarket · BTC Markets",
+        f"Resolves {market_date.strftime('%d %b %Y')} · Session {session_start.strftime('%d %b %H:%M')} → {session_end.strftime('%d %b %H:%M')} IST",
     )
-else:
-    st.markdown("<div class='card muted'>GEX by strike unavailable</div>", unsafe_allow_html=True)
+    _session_strip()
 
-# poly_list and found_date already unpacked above (before 3-column section)
+    if found_date and found_date != market_date:
+        st.markdown(
+            f"<div class='news-card' style='border-left-color:#E8B000;margin-bottom:8px'>"
+            f"<span class='yellow'>⚠ {market_date.strftime('%d %b').upper()} MARKETS NOT YET LISTED — "
+            f"SHOWING {found_date.strftime('%d %b %Y').upper()} INSTEAD</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    if poly_list and spot:
+        rows       = []
+        bond_types = []
+        for m in poly_list:
+            strike   = m["strike"]
+            diff_usd = (spot - strike) if strike else None
+            diff_pct = (diff_usd / strike * 100) if strike else None
+            yes_p    = m["yes_price"]
+            no_p     = m["no_price"]
+            yes_c    = yes_p * 100 if yes_p is not None else 0.0
+            no_c     = no_p  * 100 if no_p  is not None else 0.0
+            direction = "▲ ITM" if diff_usd and diff_usd > 0 else "▼ OTM"
+            if 99 < yes_c < 99.9:
+                bond_types.append("yes")
+            elif 99 < no_c < 99.9:
+                bond_types.append("no")
+            else:
+                bond_types.append("")
+            rows.append({
+                "Strike ($)":    f"${strike:,.0f}"       if strike           else "—",
+                "Spot − Strike": f"${diff_usd:+,.0f}"    if diff_usd is not None else "—",
+                "Diff %":        f"{diff_pct:+.2f}%"     if diff_pct is not None else "—",
+                "Position":      direction,
+                "YES (¢)":       f"{yes_c:.1f}¢"         if yes_p is not None else "—",
+                "NO (¢)":        f"{no_c:.1f}¢"          if no_p  is not None else "—",
+                "Volume ($)":    f"${m['volume']:,.0f}",
+                "Question":      m["question"],
+            })
+
+        df = pd.DataFrame(rows)
+
+        def _style_bonds(row):
+            bt = bond_types[row.name] if row.name < len(bond_types) else ""
+            if bt == "yes":
+                return ["background-color: #062018; color: #00D4A8; font-weight: 700"] * len(row)
+            if bt == "no":
+                return ["background-color: #061428; color: #4E9FD4; font-weight: 700"] * len(row)
+            return [""] * len(row)
+
+        styled = df.style.apply(_style_bonds, axis=1)
+        st.dataframe(styled, use_container_width=True, hide_index=True, height=520)
+
+    elif poly_list:
+        st.info("Spot price unavailable — showing raw Polymarket data.")
+        rows = [
+            {
+                "Strike ($)": f"${m['strike']:,.0f}"        if m["strike"]    else "—",
+                "YES (¢)":    f"{m['yes_price']*100:.1f}¢" if m["yes_price"] else "—",
+                "NO (¢)":     f"{m['no_price']*100:.1f}¢"  if m["no_price"]  else "—",
+                "Volume ($)": f"${m['volume']:,.0f}",
+                "Question":   m["question"],
+            }
+            for m in poly_list
+        ]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            f"No Polymarket BTC markets found near {market_date.strftime('%d %b %Y')} "
+            "(checked ±3 days). Markets may not be listed yet."
+        )
 
 
-# ── Row 3: AI Analysis ────────────────────────────────────────────────────────
-st.markdown("<hr>", unsafe_allow_html=True)
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: AI ANALYSIS
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "AI Analysis":
+    _page_header("AI Analysis", "Gemini 2.0 Flash · Bonding strategy decision support")
 
-ai_hdr, ai_btn = st.columns([5, 1])
-with ai_hdr:
-    st.markdown("<div class='sec-hdr'>AI Analysis · Bonding Strategy</div>", unsafe_allow_html=True)
-with ai_btn:
-    run_ai = st.button("🤖 Analyze", use_container_width=True)
+    ai_hdr, ai_btn = st.columns([5, 1])
+    with ai_hdr:
+        st.markdown("<div class='sec-hdr'>AI Analysis · Bonding Strategy</div>", unsafe_allow_html=True)
+    with ai_btn:
+        run_ai = st.button("🤖 Analyze", use_container_width=True)
 
+    @st.cache_data(ttl=300, show_spinner=False)
+    def load_ai_analysis(
+        spot, change_pct,
+        ema20, ema50, ema200,
+        atr,
+        vol1m_hl_pct, vol6m_hl_pct,
+        dvol, daily_move_pct,
+        rv7, rv30,
+        fg_val, fg_label,
+        funding_rate,
+        etf_flow_today,
+        ff_count,
+        gex_net_bn,
+        gex_regime,
+        gex_flip,
+        skew_rr,
+        skew_regime,
+        vwap,
+        news_headlines,
+        poly_summary,
+    ) -> str:
+        api_key = st.secrets.get("OPENROUTER_API_KEY", "")
+        if not api_key:
+            return "⚠ Add `OPENROUTER_API_KEY` to Streamlit secrets to enable AI analysis."
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_ai_analysis(
-    spot, change_pct,
-    ema20, ema50, ema200,
-    atr,
-    vol1m_hl_pct, vol6m_hl_pct,
-    dvol, daily_move_pct,
-    rv7, rv30,
-    fg_val, fg_label,
-    funding_rate,
-    etf_flow_today,
-    ff_count,
-    gex_net_bn,
-    gex_regime,
-    gex_flip,
-    skew_rr,
-    skew_regime,
-    vwap,
-    news_headlines,
-    poly_summary,
-) -> str:
-    api_key = st.secrets.get("OPENROUTER_API_KEY", "")
-    if not api_key:
-        return "⚠ Add `OPENROUTER_API_KEY` to Streamlit secrets to enable AI analysis."
+        def _fmt(val, fmt, prefix="", suffix=""):
+            return f"{prefix}{val:{fmt}}{suffix}" if val is not None else "N/A"
 
-    def _fmt(val, fmt, prefix="", suffix=""):
-        return f"{prefix}{val:{fmt}}{suffix}" if val is not None else "N/A"
-
-    context = f"""BTC MARKET SNAPSHOT
+        context = f"""BTC MARKET SNAPSHOT
 Spot: {_fmt(spot, ",.0f", "$")}  |  24h change: {_fmt(change_pct, "+.2f", suffix="%")}
 EMA20: {_fmt(ema20, ",.0f", "$")}  |  EMA50: {_fmt(ema50, ",.0f", "$")}  |  EMA200: {_fmt(ema200, ",.0f", "$")}
 ATR (14d): {_fmt(atr, ",.0f", "$")}
@@ -942,7 +1300,7 @@ BTC NEWS HEADLINES (latest):
 POLYMARKET BTC MARKETS (today's session)
 {poly_summary}"""
 
-    prompt = f"""{context}
+        prompt = f"""{context}
 
 STRATEGY: Polymarket BTC daily BONDING strategy.
 - Target YES or NO tokens priced between 99¢ and 99.9¢ (marked ★ in the market data).
@@ -969,195 +1327,108 @@ Respond in EXACTLY this format (2–3 sentences each, specific numbers required)
 **STRIKE SELECTION**:
 [Name the exact strike, YES or NO, and its entry price in ¢ (must be between 99¢ and 99.9¢). State the cushion in USD and the safety ratio. Explain in one sentence what single event would invalidate this trade.]"""
 
-    try:
-        from openai import OpenAI
-        client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=api_key,
-            default_headers={"X-Title": "BTC Trade Dashboard"},
-        )
-        resp = client.chat.completions.create(
-            model="openrouter/free",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return f"Analysis unavailable: {e}"
-
-
-if run_ai:
-    load_ai_analysis.clear()
-
-# Build poly summary string for the prompt — flag bonding opportunities explicitly
-if poly_list and spot:
-    _poly_lines = []
-    for m in poly_list[:15]:
-        if m["strike"] and m["yes_price"] is not None:
-            diff   = spot - m["strike"]
-            yes_c  = m["yes_price"] * 100
-            no_c   = m["no_price"]  * 100 if m["no_price"] else 0
-            if 99 < yes_c < 99.9:
-                flag = "  ★ YES BOND"
-            elif 99 < no_c < 99.9:
-                flag = "  ★ NO BOND"
-            elif 97 <= yes_c <= 99:
-                flag = "  (YES near-bond)"
-            elif 97 <= no_c <= 99:
-                flag = "  (NO near-bond)"
-            else:
-                flag = ""
-            _poly_lines.append(
-                f"  Strike ${m['strike']:,.0f}"
-                f"  spot {'above' if diff > 0 else 'below'} by ${abs(diff):,.0f}"
-                f"  YES={yes_c:.0f}¢  NO={no_c:.0f}¢"
-                f"  Vol=${m['volume']:,.0f}{flag}"
+        try:
+            from openai import OpenAI
+            client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=api_key,
+                default_headers={"X-Title": "BTC Trade Dashboard"},
             )
-    _poly_summary = "\n".join(_poly_lines) or "No markets"
-else:
-    _poly_summary = "No markets available"
+            resp = client.chat.completions.create(
+                model="google/gemini-2.0-flash-001",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=900,
+            )
+            return resp.choices[0].message.content
+        except Exception as e:
+            return f"Analysis unavailable: {e}"
 
-_rv   = d.get("rv") or {}
-_fg   = d.get("fear_greed") or {}
-_vol1 = (d.get("vol") or {}).get("1m") or {}
-_vol6 = (d.get("vol") or {}).get("6m") or {}
-_fund = d.get("funding") or {}
-_etff = d.get("etf_flows") or {}
+    if run_ai:
+        load_ai_analysis.clear()
 
-# GEX aggregate from all-expirations book summary (same source as card + chart)
-_gex_all_data = d.get("gex_all") or {}
-_gex_net_m  = (_gex_all_data.get("net_gex_bn", 0) * 1000) if _gex_all_data else None
-_gex_regime = _gex_all_data.get("regime", "") if _gex_all_data else ""
+    if poly_list and spot:
+        _poly_lines = []
+        for m in poly_list[:15]:
+            if m["strike"] and m["yes_price"] is not None:
+                diff   = spot - m["strike"]
+                yes_c  = m["yes_price"] * 100
+                no_c   = m["no_price"] * 100 if m["no_price"] else 0
+                if 99 < yes_c < 99.9:
+                    flag = "  ★ YES BOND"
+                elif 99 < no_c < 99.9:
+                    flag = "  ★ NO BOND"
+                elif 97 <= yes_c <= 99:
+                    flag = "  (YES near-bond)"
+                elif 97 <= no_c <= 99:
+                    flag = "  (NO near-bond)"
+                else:
+                    flag = ""
+                _poly_lines.append(
+                    f"  Strike ${m['strike']:,.0f}"
+                    f"  spot {'above' if diff > 0 else 'below'} by ${abs(diff):,.0f}"
+                    f"  YES={yes_c:.0f}¢  NO={no_c:.0f}¢"
+                    f"  Vol=${m['volume']:,.0f}{flag}"
+                )
+        _poly_summary = "\n".join(_poly_lines) or "No markets"
+    else:
+        _poly_summary = "No markets available"
 
-_news = d.get("news") or []
-_news_summary = "\n".join(
-    f"• {item['title']} ({item['source']})" for item in _news[:8]
-) or "No headlines available"
+    _rv   = d.get("rv") or {}
+    _fg   = d.get("fear_greed") or {}
+    _vol1 = (d.get("vol") or {}).get("1m") or {}
+    _vol6 = (d.get("vol") or {}).get("6m") or {}
+    _fund = d.get("funding") or {}
+    _etff = d.get("etf_flows") or {}
+    _gex_all_data = d.get("gex_all") or {}
+    _gex_net_m  = (_gex_all_data.get("net_gex_bn", 0) * 1000) if _gex_all_data else None
+    _gex_regime = _gex_all_data.get("regime", "") if _gex_all_data else ""
+    _news = d.get("news") or []
+    _news_summary = "\n".join(f"• {item['title']} ({item['source']})" for item in _news[:8]) or "No headlines available"
 
-with st.spinner("Running AI analysis…"):
-    analysis = load_ai_analysis(
-        spot            = spot,
-        change_pct      = (d.get("stats24") or {}).get("change_pct"),
-        ema20           = emas.get(20),
-        ema50           = emas.get(50),
-        ema200          = emas.get(200),
-        atr             = atr,
-        vol1m_hl_pct    = _vol1.get("avg_hl_pct"),
-        vol6m_hl_pct    = _vol6.get("avg_hl_pct"),
-        dvol            = d.get("dvol"),
-        daily_move_pct  = d["dvol"] / (365 ** 0.5) if d.get("dvol") else None,
-        rv7             = _rv.get("rv7"),
-        rv30            = _rv.get("rv30"),
-        fg_val          = _fg.get("value"),
-        fg_label        = _fg.get("classification", ""),
-        funding_rate    = _fund.get("rate_pct"),
-        etf_flow_today  = _etff.get("today"),
-        ff_count        = len(d.get("ff") or []),
-        gex_net_bn      = (_gex_net_m / 1000) if _gex_net_m is not None else None,
-        gex_regime      = _gex_regime,
-        gex_flip        = None,
-        skew_rr         = (d.get("skew") or {}).get("rr"),
-        skew_regime     = (d.get("skew") or {}).get("regime", ""),
-        vwap            = d.get("vwap"),
-        news_headlines  = _news_summary,
-        poly_summary    = _poly_summary,
-    )
+    with st.spinner("Running AI analysis…"):
+        analysis = load_ai_analysis(
+            spot            = spot,
+            change_pct      = (d.get("stats24") or {}).get("change_pct"),
+            ema20           = emas.get(20),
+            ema50           = emas.get(50),
+            ema200          = emas.get(200),
+            atr             = atr,
+            vol1m_hl_pct    = _vol1.get("avg_hl_pct"),
+            vol6m_hl_pct    = _vol6.get("avg_hl_pct"),
+            dvol            = d.get("dvol"),
+            daily_move_pct  = d["dvol"] / (365 ** 0.5) if d.get("dvol") else None,
+            rv7             = _rv.get("rv7"),
+            rv30            = _rv.get("rv30"),
+            fg_val          = _fg.get("value"),
+            fg_label        = _fg.get("classification", ""),
+            funding_rate    = _fund.get("rate_pct"),
+            etf_flow_today  = _etff.get("today"),
+            ff_count        = len(d.get("ff") or []),
+            gex_net_bn      = (_gex_net_m / 1000) if _gex_net_m is not None else None,
+            gex_regime      = _gex_regime,
+            gex_flip        = None,
+            skew_rr         = (d.get("skew") or {}).get("rr"),
+            skew_regime     = (d.get("skew") or {}).get("regime", ""),
+            vwap            = d.get("vwap"),
+            news_headlines  = _news_summary,
+            poly_summary    = _poly_summary,
+        )
 
-st.markdown(
-    f"<div class='card' style='padding:14px 18px;line-height:1.9;font-size:0.8rem;border-left:2px solid #00D4A8'>"
-    f"{analysis.replace(chr(10), '<br>')}"
-    f"</div>",
-    unsafe_allow_html=True,
-)
-
-
-# ── Row 4: Polymarket Markets ─────────────────────────────────────────────────
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown(
-    f"<div class='sec-hdr'>"
-    f"Polymarket · BTC Markets — resolves {market_date.strftime('%d %b %Y')} &nbsp;·&nbsp; "
-    f"Session {session_start.strftime('%d %b %H:%M')} → {session_end.strftime('%d %b %H:%M')} IST"
-    f"</div>",
-    unsafe_allow_html=True,
-)
-
-if found_date and found_date != market_date:
     st.markdown(
-        f"<div class='news-card' style='border-left-color:#E8B000;margin-bottom:8px'>"
-        f"<span class='yellow'>⚠ {market_date.strftime('%d %b').upper()} MARKETS NOT YET LISTED — "
-        f"SHOWING {found_date.strftime('%d %b %Y').upper()} INSTEAD</span>"
+        f"<div class='card' style='padding:16px 20px;line-height:2;font-size:0.82rem;border-left:2px solid #00D4A8'>"
+        f"{analysis.replace(chr(10), '<br>')}"
         f"</div>",
         unsafe_allow_html=True,
-    )
-
-if poly_list and spot:
-    rows       = []
-    bond_types = []
-    for m in poly_list:
-        strike   = m["strike"]
-        diff_usd = (spot - strike) if strike else None
-        diff_pct = (diff_usd / strike * 100) if strike else None
-        yes_p    = m["yes_price"]
-        no_p     = m["no_price"]
-        yes_c    = yes_p * 100 if yes_p is not None else 0.0
-        no_c     = no_p  * 100 if no_p  is not None else 0.0
-        direction = "▲ ITM" if diff_usd and diff_usd > 0 else "▼ OTM"
-        if 99 < yes_c < 99.9:
-            bond_types.append("yes")
-        elif 99 < no_c < 99.9:
-            bond_types.append("no")
-        else:
-            bond_types.append("")
-        rows.append({
-            "Strike ($)":    f"${strike:,.0f}"        if strike           else "—",
-            "Spot − Strike": f"${diff_usd:+,.0f}"     if diff_usd is not None else "—",
-            "Diff %":        f"{diff_pct:+.2f}%"       if diff_pct is not None else "—",
-            "Position":      direction,
-            "YES (¢)":       f"{yes_c:.1f}¢"           if yes_p is not None else "—",
-            "NO (¢)":        f"{no_c:.1f}¢"            if no_p  is not None else "—",
-            "Volume ($)":    f"${m['volume']:,.0f}",
-            "Question":      m["question"],
-        })
-
-    df = pd.DataFrame(rows)
-
-    def _style_bonds(row):
-        bt = bond_types[row.name] if row.name < len(bond_types) else ""
-        if bt == "yes":
-            return ["background-color: #062018; color: #00D4A8; font-weight: 700"] * len(row)
-        if bt == "no":
-            return ["background-color: #061428; color: #4E9FD4; font-weight: 700"] * len(row)
-        return [""] * len(row)
-
-    styled = df.style.apply(_style_bonds, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=400)
-
-elif poly_list:
-    st.info("Spot price unavailable — showing raw Polymarket data.")
-    rows = [
-        {
-            "Strike ($)": f"${m['strike']:,.0f}"         if m["strike"]    else "—",
-            "YES (¢)":    f"{m['yes_price']*100:.1f}¢"  if m["yes_price"] else "—",
-            "NO (¢)":     f"{m['no_price']*100:.1f}¢"   if m["no_price"]  else "—",
-            "Volume ($)": f"${m['volume']:,.0f}",
-            "Question":   m["question"],
-        }
-        for m in poly_list
-    ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-else:
-    st.info(
-        f"No Polymarket BTC markets found near {market_date.strftime('%d %b %Y')} "
-        "(checked ±3 days). Markets may not be listed yet."
     )
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown(
-    f"<span class='muted' style='font-size:0.72rem'>"
-    f"Data sources: Binance · Kraken · Bybit/OKX · Deribit · Alternative.me · CMC · ForexFactory · CryptoCompare · Polymarket Gamma API"
-    f"&nbsp;|&nbsp; AI: Gemini 2.0 Flash &nbsp;|&nbsp; Cache TTL: 60s &nbsp;|&nbsp; "
-    f"Last loaded: {now_utc.strftime('%H:%M:%S')} UTC"
+    f"<span class='muted' style='font-size:0.68rem'>"
+    f"Binance · Kraken · Bybit · Deribit · Alternative.me · ForexFactory · CryptoCompare · Polymarket"
+    f"&nbsp;|&nbsp; AI: Gemini 2.0 Flash &nbsp;|&nbsp; Cache 60s/300s &nbsp;|&nbsp; "
+    f"Loaded {now_utc.strftime('%H:%M:%S')} UTC"
     f"</span>",
     unsafe_allow_html=True,
 )

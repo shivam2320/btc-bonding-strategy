@@ -170,22 +170,48 @@ def _vol_metrics_for(daily: "pd.DataFrame") -> dict:
         "avg_hl_usd": m["avg_hl_usd"],
         "max_hl_pct": max_pct,
         "max_hl_usd": max_usd,
-        "max_hl_pct_date": str(ts_pct.date()) if ts_pct else "—",
-        "max_hl_usd_date": str(ts_usd.date()) if ts_usd else "—",
+        "max_hl_pct_date": ts_pct.strftime("%-d %b '%y") if ts_pct else "—",
+        "max_hl_usd_date": ts_usd.strftime("%-d %b '%y") if ts_usd else "—",
     }
 
 
-def get_volatility_metrics(ohlc: "pd.DataFrame | None" = None) -> dict | None:
-    """Compute volatility metrics.
+def get_volatility_metrics(ohlc: "pd.DataFrame | None" = None, is_weekend: bool = False) -> dict | None:
+    """Compute volatility metrics filtered to weekend or weekday sessions.
 
     Primary: slice `ohlc` (Kraken live data — always current).
     Fallback: load from local CSVs (stale but better than nothing).
     """
-    if ohlc is not None and len(ohlc) >= 30:
+    def _filter_day_type(df: "pd.DataFrame") -> "pd.DataFrame":
+        if "date" not in df.columns:
+            return df
+        dow = df["date"].dt.dayofweek  # Mon=0 … Sun=6
+        return df[dow >= 5] if is_weekend else df[dow < 5]
+
+    def _window(df: "pd.DataFrame", days: int) -> "pd.DataFrame":
+        """Slice df to the last `days` calendar days using the date column."""
+        if "date" not in df.columns or df.empty:
+            return df
         try:
-            m1 = _vol_metrics_for(ohlc.tail(30))
-            m6 = _vol_metrics_for(ohlc.tail(180)) if len(ohlc) >= 180 else None
-            return {"1m": m1, "6m": m6}
+            cutoff = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(days=days)
+            col = df["date"]
+            # Strip tz from cutoff if the column is naive
+            if col.dt.tz is None:
+                cutoff = cutoff.tz_localize(None)
+            return df[col >= cutoff].reset_index(drop=True)
+        except Exception:
+            return df.tail(days).reset_index(drop=True)  # row-count fallback
+
+    if ohlc is not None and len(ohlc) >= 10:
+        try:
+            filtered = _filter_day_type(ohlc).reset_index(drop=True)
+            if len(filtered) < 10:
+                filtered = ohlc
+            w1 = _window(filtered, 30)
+            w6 = _window(filtered, 180)
+            m1 = _vol_metrics_for(w1) if len(w1) >= 5 else None
+            m6 = _vol_metrics_for(w6) if len(w6) >= 10 else None
+            if m1 or m6:
+                return {"1m": m1, "6m": m6}
         except Exception:
             pass
 
@@ -197,8 +223,15 @@ def get_volatility_metrics(ohlc: "pd.DataFrame | None" = None) -> dict | None:
         )
         path_1m = ROOT / "BTCUSD_1M_1HOUR_FROM_PERPLEXITY (1).csv"
         path_6m = ROOT / "BTCUSD_6M_1DAY_FROM_PERPLEXITY (1).csv"
-        m1 = _vol_metrics_for(daily_ohlc_from_hourly(load_ohlc(path_1m))) if path_1m.exists() else None
-        m6 = _vol_metrics_for(load_ohlc(path_6m)) if path_6m.exists() else None
+        m1, m6 = None, None
+        if path_1m.exists():
+            df1 = _filter_day_type(daily_ohlc_from_hourly(load_ohlc(path_1m)))
+            w1 = _window(df1, 30)
+            m1 = _vol_metrics_for(w1) if len(w1) >= 5 else None
+        if path_6m.exists():
+            df6 = _filter_day_type(load_ohlc(path_6m))
+            w6 = _window(df6, 180)
+            m6 = _vol_metrics_for(w6) if len(w6) >= 10 else None
         if m1 is None and m6 is None:
             return None
         return {"1m": m1, "6m": m6}
@@ -442,6 +475,22 @@ _MONTHS = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,
            "JUL":7,"AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
 
 
+def _parse_date_code(date_code: str) -> "date | None":
+    """Parse Deribit date codes like '7JUN26' or '23MAY26' → date.
+    Day is NOT zero-padded in Deribit instrument names.
+    """
+    try:
+        i = 0
+        while i < len(date_code) and date_code[i].isdigit():
+            i += 1
+        day   = int(date_code[:i])
+        month = _MONTHS[date_code[i:i + 3].upper()]
+        year  = 2000 + int(date_code[i + 3:i + 5])
+        return date(year, month, day)
+    except Exception:
+        return None
+
+
 def _norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
@@ -469,15 +518,12 @@ def _bs_gamma(S: float, K: float, T: float, sigma: float) -> float:
 
 
 def _expiry_years(date_code: str) -> float:
-    """Parse Deribit date code like '23MAY26' → years to expiry from today."""
-    try:
-        day   = int(date_code[:2])
-        month = _MONTHS[date_code[2:5].upper()]
-        year  = 2000 + int(date_code[5:7])
-        T = (date(year, month, day) - date.today()).days / 365.0
-        return max(T, 0.5 / 365)   # floor at ~12 h so gamma stays finite
-    except Exception:
+    """Deribit date code → years to expiry from today."""
+    d = _parse_date_code(date_code)
+    if d is None:
         return 0.0
+    T = (d - date.today()).days / 365.0
+    return max(T, 0.5 / 365)   # floor at ~12 h so gamma stays finite
 
 
 def get_options_skew() -> dict | None:
@@ -578,7 +624,7 @@ def get_session_vwap(session_start_ist: "datetime") -> float | None:
         return None
 
 
-def get_btc_gex() -> dict | None:
+def get_btc_gex(expiry_date: "date | None" = None) -> dict | None:
     """Net Gamma Exposure from all active BTC options on Deribit.
 
     Deribit book summary doesn't expose gamma directly, so we compute it via
@@ -590,12 +636,12 @@ def get_btc_gex() -> dict | None:
     Negative GEX → dealers short gamma → destabilising (trending/volatile).
     """
     try:
-        return _get_btc_gex_inner()
+        return _get_btc_gex_inner(expiry_date=expiry_date)
     except Exception:
         return None
 
 
-def _get_btc_gex_inner() -> dict | None:
+def _get_btc_gex_inner(expiry_date: "date | None" = None) -> dict | None:
     data = _get(
         "https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
         {"currency": "BTC", "kind": "option"},
@@ -636,6 +682,12 @@ def _get_btc_gex_inner() -> dict | None:
             strike = float(parts[-2])
         except ValueError:
             continue
+
+        # When an expiry date is specified, skip instruments for other dates
+        if expiry_date is not None:
+            inst_date = _parse_date_code(date_code)
+            if inst_date != expiry_date:
+                continue
 
         mark_iv = float(inst.get("mark_iv") or 0) / 100   # % → decimal
         oi      = float(inst.get("open_interest") or 0)
